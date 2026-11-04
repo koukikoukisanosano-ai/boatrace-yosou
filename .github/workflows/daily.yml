@@ -1,0 +1,69 @@
+name: 毎朝の準備（結果の取り込み・近況・学習し直し）
+
+on:
+  schedule:
+    - cron: '40 20 * * *'   # 毎朝 5:40（日本時間）
+    - cron: '35 22 * * *'   # 毎朝 7:35（日本時間）念のためもう一度
+  workflow_dispatch:
+    inputs:
+      retrain:
+        description: '学習し直す'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  actions: write
+
+concurrency:
+  group: data-write
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt
+      - name: 過去データの取り込み（昨日まで）
+        run: python tools/fetch_openapi.py
+      - name: 今日走る選手の近況
+        run: node tools/make_state.mjs
+      - name: 学習し直し（毎週月曜・または手動）
+        run: |
+          TODAY=$(date +%Y%m%d)
+          VER=$(python -c "import json;print(json.load(open('docs/model/model.json')).get('version','')[:8])" 2>/dev/null || echo "")
+          if [ "${{ inputs.retrain }}" = "true" ] || { [ "$(date +%u)" = "1" ] && [ "$VER" != "$TODAY" ]; }; then
+            WORK=work bash tools/retrain.sh
+          else
+            echo "学習し直しは毎週月曜です（今のモデル: $VER）"
+          fi
+      - name: 保存
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data docs
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -q -m "毎朝の準備 $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3 4 5 6; do
+            if git pull -q --rebase -X theirs && git push -q; then echo "保存しました"; exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          echo "保存に失敗しました"; exit 1
+      - name: ページを公開
+        run: gh workflow run pages.yml --ref main

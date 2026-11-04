@@ -1,0 +1,6 @@
+{
+  "name": "boatrace-yosou",
+  "private": true,
+  "type": "module",
+  "description": "競艇予想（スマホ用・GitHubで自動更新）"
+}

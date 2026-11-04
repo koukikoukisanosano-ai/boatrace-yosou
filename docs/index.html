@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>競艇予想</title>
+<meta name="description" content="スタート展示などの直前情報を加味した競艇の予想（スマホ用）">
+<meta name="theme-color" content="#f3f6f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1a21" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="競艇予想">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f3f6f8;
+  --surface: #ffffff;
+  --ink: #14212a;
+  --muted: #5d6d78;
+  --faint: #8a98a2;
+  --line: #d6dee3;
+  --water: #0a6f9c;
+  --water-soft: #e1eef4;
+  --warn: #c8102e;
+  --ok: #1b7f45;
+  --b1: #ffffff; --b1-ink: #14212a; --b1-edge: #9aa8b1;
+  --b2: #1b1b1b; --b2-ink: #ffffff; --b2-edge: #1b1b1b;
+  --b3: #e60012; --b3-ink: #ffffff; --b3-edge: #e60012;
+  --b4: #0068b7; --b4-ink: #ffffff; --b4-edge: #0068b7;
+  --b5: #ffd900; --b5-ink: #14212a; --b5-edge: #d9b800;
+  --b6: #00a23a; --b6-ink: #ffffff; --b6-edge: #00a23a;
+  --num: 'Saira Semi Condensed', 'Hiragino Sans', system-ui, sans-serif;
+  --text: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1a21; --surface: #16242d; --ink: #e5edf1; --muted: #98a9b4; --faint: #6f818c; --line: #263a46;
+    --water: #4fb3df; --water-soft: #173543; --warn: #ff5a6e; --ok: #4cc47f;
+    --b1-edge: #e5edf1; --b2: #050505; --b2-edge: #6f818c;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1a21; --surface: #16242d; --ink: #e5edf1; --muted: #98a9b4; --faint: #6f818c; --line: #263a46;
+  --water: #4fb3df; --water-soft: #173543; --warn: #ff5a6e; --ok: #4cc47f;
+  --b1-edge: #e5edf1; --b2: #050505; --b2-edge: #6f818c;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink); font-family: var(--text);
+  font-size: 15px; line-height: 1.55; padding-bottom: calc(24px + env(safe-area-inset-bottom));
+}
+button { font: inherit; color: inherit; }
+.num { font-family: var(--num); font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+
+/* ヘッダー */
+.top {
+  position: sticky; top: 0; z-index: 5; background: var(--bg);
+  padding: calc(10px + env(safe-area-inset-top)) 16px 8px; border-bottom: 1px solid var(--line);
+}
+.top-row { display: flex; align-items: baseline; gap: 10px; }
+.top h1 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: 0.04em; }
+.datenav { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.datenav button {
+  border: 1px solid var(--line); background: var(--surface); border-radius: 8px; min-width: 34px; height: 32px; padding: 0 8px;
+}
+.datenav .d { font-family: var(--num); font-weight: 600; font-size: 17px; padding: 0 6px; }
+.status { margin-top: 4px; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.status .bad { color: var(--warn); }
+.tabs { display: flex; gap: 6px; margin-top: 8px; }
+.tabs button {
+  flex: 1; height: 34px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: 14px;
+}
+.tabs button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.venues { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; scrollbar-width: none; }
+.venues::-webkit-scrollbar { display: none; }
+.venues button {
+  flex: none; height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid var(--line); background: var(--surface); font-size: 13px;
+}
+.venues button[aria-pressed="true"] { border-color: var(--water); color: var(--water); background: var(--water-soft); font-weight: 700; }
+
+main { padding: 6px 16px 0; max-width: 720px; margin: 0 auto; }
+.note { margin: 14px 0; padding: 12px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+.note.bad { color: var(--warn); border-color: var(--warn); }
+
+/* レース一覧 */
+.race { border-bottom: 1px solid var(--line); }
+.race-head {
+  display: grid; grid-template-columns: 62px 1fr auto; grid-template-areas: "time name left" "time strip strip" "time picks picks";
+  column-gap: 12px; row-gap: 5px; width: 100%; text-align: left; background: none; border: 0; padding: 12px 0; cursor: pointer;
+}
+.race-head:focus-visible { outline: 2px solid var(--water); outline-offset: 2px; border-radius: 6px; }
+.rh-time { grid-area: time; display: flex; flex-direction: column; align-items: flex-start; }
+.rh-time .t { font-family: var(--num); font-size: 24px; font-weight: 600; line-height: 1.05; }
+.rh-time .r { font-family: var(--num); font-size: 14px; color: var(--muted); font-weight: 600; }
+.rh-name { grid-area: name; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rh-name .v { font-weight: 700; font-size: 16px; white-space: nowrap; }
+.rh-name .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rh-left { grid-area: left; display: block; font-size: 13px; color: var(--muted); white-space: nowrap; align-self: center; }
+.rh-left.soon { color: var(--warn); font-weight: 700; }
+.strip { grid-area: strip; display: flex; height: 22px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+.strip span {
+  display: flex; align-items: center; justify-content: center; font-family: var(--num); font-weight: 700; font-size: 13px; min-width: 0; overflow: hidden;
+}
+.picks { grid-area: picks; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.picks .marks { color: var(--ink); font-weight: 600; letter-spacing: 0.02em; }
+.pv { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 10px; white-space: nowrap; }
+.pv.full { color: var(--ok); background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.pv.none { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.hitmark { font-weight: 700; }
+.hitmark.yes { color: var(--ok); }
+.hitmark.no { color: var(--faint); }
+
+/* 艇番の色 */
+.w1 { background: var(--b1); color: var(--b1-ink); box-shadow: inset 0 0 0 1px var(--b1-edge); }
+.w2 { background: var(--b2); color: var(--b2-ink); box-shadow: inset 0 0 0 1px var(--b2-edge); }
+.w3 { background: var(--b3); color: var(--b3-ink); }
+.w4 { background: var(--b4); color: var(--b4-ink); }
+.w5 { background: var(--b5); color: var(--b5-ink); }
+.w6 { background: var(--b6); color: var(--b6-ink); }
+.strip .w1, .strip .w2 { box-shadow: none; }
+.chip {
+  display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px;
+  font-family: var(--num); font-weight: 700; font-size: 15px; line-height: 1;
+}
+.combo { display: inline-flex; align-items: center; gap: 2px; }
+.combo .sep { color: var(--faint); font-size: 12px; margin: 0 1px; }
+
+/* 詳細 */
+.race-body { padding: 0 0 18px; }
+.cond { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 14px; margin-bottom: 10px; }
+.cond b { color: var(--ink); font-weight: 600; }
+.boat { display: grid; grid-template-columns: 30px 1fr 92px; gap: 4px 10px; padding: 9px 0; border-top: 1px solid var(--line); align-items: start; }
+.boat .chip { width: 30px; height: 30px; font-size: 19px; border-radius: 7px; }
+.boat.absent { opacity: 0.45; }
+.bn { font-weight: 700; font-size: 15px; }
+.bn small { font-weight: 500; color: var(--muted); margin-left: 6px; font-size: 12px; }
+.bx { font-size: 12.5px; color: var(--muted); line-height: 1.6; display: flex; flex-wrap: wrap; gap: 0 10px; }
+.bx .nb { white-space: nowrap; }
+.bx .hl { color: var(--ink); font-weight: 700; }
+.bx .warn { color: var(--warn); font-weight: 700; }
+.bp { text-align: right; }
+.bp .big { font-family: var(--num); font-weight: 700; font-size: 24px; line-height: 1.05; }
+.bp .big small { font-size: 13px; margin-left: 1px; }
+.bars { margin-top: 4px; display: grid; gap: 3px; }
+.bar { display: grid; grid-template-columns: 26px 1fr; align-items: center; gap: 4px; font-size: 10.5px; color: var(--faint); }
+.bar i { display: block; height: 5px; border-radius: 3px; background: var(--water); opacity: 0.85; }
+.bar .track { background: var(--water-soft); border-radius: 3px; height: 5px; overflow: hidden; }
+h3 { font-size: 14px; margin: 16px 0 6px; font-weight: 700; }
+h3 small { font-weight: 500; color: var(--muted); margin-left: 6px; font-size: 12px; }
+.bets { display: grid; grid-template-columns: 1fr auto auto; gap: 0 14px; align-items: center; }
+.bets > div { padding: 5px 0; border-bottom: 1px dashed var(--line); }
+.bets .p { font-family: var(--num); font-weight: 700; font-size: 16px; text-align: right; }
+.bets .o { font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap; }
+.bets .o b { font-family: var(--num); font-size: 15px; color: var(--ink); font-weight: 600; }
+.bets .hit { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.minor { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; }
+.minor span.p { font-family: var(--num); font-weight: 600; margin-left: 4px; }
+.reasons { margin: 0; padding-left: 1.1em; font-size: 13.5px; }
+.reasons li { margin: 2px 0; }
+.result { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 13.5px; }
+.result .pay { font-family: var(--num); font-weight: 700; font-size: 18px; }
+.explain { font-size: 12px; color: var(--muted); margin-top: 6px; }
+
+/* 成績 */
+.score { margin: 12px 0 4px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.score h2 { margin: 0 0 6px; font-size: 14px; }
+.score .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.score .k { font-size: 11.5px; color: var(--muted); }
+.score .v { font-family: var(--num); font-weight: 700; font-size: 22px; line-height: 1.1; }
+.score .v small { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 2px; }
+footer { max-width: 720px; margin: 22px auto 0; padding: 0 16px; font-size: 12px; color: var(--muted); }
+footer p { margin: 6px 0; }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--water); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+@media (min-width: 560px) { .boat { grid-template-columns: 34px 1fr 120px; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-row">
+    <h1>競艇予想</h1>
+    <div class="datenav">
+      <button type="button" id="prev" aria-label="前の日">‹</button>
+      <span class="d" id="dateLabel">--/--</span>
+      <button type="button" id="next" aria-label="次の日">›</button>
+      <button type="button" id="reload" aria-label="最新にする">↻</button>
+    </div>
+  </div>
+  <div class="status" id="status"><span><span class="spin"></span> 読み込み中</span></div>
+  <div class="tabs" role="group" aria-label="表示">
+    <button type="button" data-view="upcoming" aria-pressed="true">締切前</button>
+    <button type="button" data-view="done" aria-pressed="false">終了・答え合わせ</button>
+  </div>
+  <div class="venues" id="venues" role="group" aria-label="レース場"></div>
+</header>
+<main id="list"></main>
+<footer id="foot"></footer>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+name: 直前情報の自動取得
+
+on:
+  schedule:
+    # 1回の実行は最長5時間半。途中で止まっても次の予定で再開する（同時には1つだけ動く）
+    - cron: '50 22 * * *'   # 7:50（日本時間）
+    - cron: '50 0 * * *'    # 9:50
+    - cron: '50 2 * * *'    # 11:50
+    - cron: '50 4 * * *'    # 13:50
+    - cron: '50 6 * * *'    # 15:50
+    - cron: '50 8 * * *'    # 17:50
+    - cron: '20 10 * * *'   # 19:20
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 直前情報を取りつづける
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python tools/live.py --max-minutes 330

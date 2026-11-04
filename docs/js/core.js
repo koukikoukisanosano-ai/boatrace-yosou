@@ -91,11 +91,6 @@ export function normalizeRace(rc, jcd, rno) {
   return race;
 }
 
-// 欠場（直前情報が空で、結果も「欠」）
-export function isAbsent(b) {
-  return b.placeSrc === '欠' || (b.exTime === null && b.exCourse === null && b.placeSrc === '' && false);
-}
-
 // 直前情報の状態: 'full' 全艇そろう / 'partial' 一部（欠場艇を除けばそろう） / 'none' まだ
 export function previewState(race) {
   const have = race.boats.filter((b) => b.exTime !== null && b.exCourse !== null);
@@ -210,8 +205,6 @@ export class History {
       for (const b of race.boats) {
         if (b.num !== null && !out.r[b.num]) {
           const x = this.racer(b.num, d, race.jcd);
-          const vjcd = {};
-          vjcd[race.jcd] = x.venueWin;
           out.r[b.num] = compactRacer(x, race.jcd);
         } else if (b.num !== null) {
           const x = this.racer(b.num, d, race.jcd);
@@ -425,8 +418,23 @@ export function rawScore(m, x) {
 }
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 
+// model.json を読み込んだら一度だけ呼ぶ: モデルの特徴量の並びと FEATURES の対応を作る
+export function prepareModel(json) {
+  for (const key of ['full', 'pre']) {
+    const slot = json[key];
+    if (!slot) continue;
+    slot.featureMap = (slot.features || FEATURES).map((name) => {
+      if (!(name in FEATURE_INDEX)) throw new Error(`未知の特徴量: ${name}`);
+      return FEATURE_INDEX[name];
+    });
+  }
+  return json;
+}
+function pick(x, map) { if (!map) return x; const out = new Array(map.length); for (let k = 0; k < map.length; k++) out[k] = x[map[k]]; return out; }
+
 // 各艇の 1着・2着以内・3着以内 の確率（レース内で合計 1・2・3 になるよう調整）
-export function placeProbs(model, X) {
+export function placeProbs(model, Xfull) {
+  const X = Xfull.map((x) => pick(x, model.featureMap));
   const n = X.length;
   const p1 = X.map((x) => sigmoid(rawScore(model.win, x)));
   const p2 = X.map((x) => sigmoid(rawScore(model.top2, x)));
@@ -502,7 +510,8 @@ export function predictRace(race, model, hist) {
   const usePv = race.preview !== 'none';
   const m = usePv ? model.full : (model.pre || model.full);
   const pp = placeProbs(m, X);
-  const tri = trifecta(pp).map((t) => ({ combo: t.idx.map((i) => boats[i].waku).join('-'), p: t.p }));
-  const der = derived(trifecta(pp), boats);
+  const raw = trifecta(pp);
+  const tri = raw.map((t) => ({ combo: t.idx.map((i) => boats[i].waku).join('-'), p: t.p }));
+  const der = derived(raw, boats);
   return { boats, course, X, probs: pp, trifecta: tri, ...der, withPreview: usePv };
 }
