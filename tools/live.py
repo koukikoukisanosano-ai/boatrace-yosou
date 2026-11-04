@@ -17,7 +17,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 import warnings
 from datetime import datetime, timedelta, timezone
@@ -38,9 +40,10 @@ LIVE_DIR = ROOT / "docs" / "live"
 OFFICIAL = "https://www.boatrace.jp/owpc/pc/race"
 OPENAPI = "https://boatraceopenapi.github.io/api/v1"
 UA = "Mozilla/5.0 (compatible; boatrace-yosou/1.0; +https://github.com/koukikoukisanosano-ai/boatrace-yosou)"
-INTERVAL = 2.0          # 公式サイトへのリクエスト間隔（秒）
-WINDOW_BEFORE = 22      # 締切の何分前から取りに行くか
-RETRY_SEC = 75          # まだ出ていなかったレースを次に見に行くまでの秒数
+INTERVAL = 1.0          # 公式サイトへのリクエストを始める間隔（秒）。1回の応答に数秒かかるので3本まで並べる
+WORKERS = 3             # 同時に取りに行く数
+WINDOW_BEFORE = 20      # 締切の何分前から取りに行くか
+RETRY_SEC = 70          # まだ出ていなかったレースを次に見に行くまでの秒数（締切10分前を切ったら40秒）
 
 
 def log(*a):
@@ -152,6 +155,9 @@ class Live:
         self.need_deploy = False
         self.last_push = 0.0
         self.stats = {"requests": 0, "captured": 0, "errors": 0}
+        self.lock = threading.Lock()
+        self.local = threading.local()
+        self.pool = ThreadPoolExecutor(max_workers=WORKERS)
 
     def path(self) -> Path:
         return LIVE_DIR / f"{self.day.replace('-', '')}.json"
@@ -162,14 +168,22 @@ class Live:
         self.store = json.loads(p.read_text()) if p.exists() else {"date": day, "updated": None, "races": {}}
         self.tried = {}
 
+    def session(self) -> requests.Session:
+        s = getattr(self.local, "s", None)
+        if s is None:
+            s = self.local.s = requests.Session()
+            s.headers.update({"User-Agent": UA, "Accept-Language": "ja"})
+        return s
+
     def official(self, page: str, jcd: int, rno: int) -> str | None:
-        wait = INTERVAL - (time.time() - self.last_req)
-        if wait > 0:
-            time.sleep(wait)
-        self.last_req = time.time()
-        self.stats["requests"] += 1
+        with self.lock:  # 全体で間隔を空ける
+            wait = INTERVAL - (time.time() - self.last_req)
+            if wait > 0:
+                time.sleep(wait)
+            self.last_req = time.time()
+            self.stats["requests"] += 1
         try:
-            r = self.s.get(f"{OFFICIAL}/{page}", params={"rno": rno, "jcd": f"{jcd:02d}", "hd": self.day.replace("-", "")}, timeout=40)
+            r = self.session().get(f"{OFFICIAL}/{page}", params={"rno": rno, "jcd": f"{jcd:02d}", "hd": self.day.replace("-", "")}, timeout=40)
             if r.status_code != 200:
                 self.stats["errors"] += 1
                 log(f"  {page} {jcd}-{rno}: HTTP {r.status_code}")
@@ -217,18 +231,25 @@ class Live:
                 continue
             if key in self.store["races"] or x["openapi_has"]:
                 continue
-            if time.time() - self.tried.get(key, 0) < RETRY_SEC:
+            retry = RETRY_SEC if mins > 10 else 40
+            if time.time() - self.tried.get(key, 0) < retry:
                 continue
             out.append(x)
         return out
 
-    def capture(self, x: dict):
-        key = f"{x['jcd']}-{x['rno']}"
-        self.tried[key] = time.time()
+    def fetch(self, x: dict):
         html = self.official("beforeinfo", x["jcd"], x["rno"])
-        if not html:
-            return
-        info = parse_beforeinfo(html)
+        return x, (parse_beforeinfo(html) if html else None)
+
+    def capture_many(self, xs: list[dict]):
+        for x in xs:
+            self.tried[f"{x['jcd']}-{x['rno']}"] = time.time()
+        for x, info in self.pool.map(self.fetch, xs):
+            if info is not None:
+                self.store_info(x, info)
+
+    def store_info(self, x: dict, info: dict):
+        key = f"{x['jcd']}-{x['rno']}"
         if not complete(info):
             return
         info["at"] = datetime.now(JST).isoformat(timespec="seconds")
@@ -296,8 +317,7 @@ class Live:
             if self.schedule and now > self.schedule[-1]["deadline"] + timedelta(minutes=5):
                 log("今日のレースは終わりました")
                 break
-            for x in self.targets(now)[:6]:
-                self.capture(x)
+            self.capture_many(self.targets(now)[:12])
             self.publish()
             self.deploy()
             if once:

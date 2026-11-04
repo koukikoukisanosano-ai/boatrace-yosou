@@ -41,6 +41,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: 過去データの取り込み（昨日まで）
         run: python tools/fetch_openapi.py
+      - name: 昨日の答え合わせを記録
+        run: node tools/report.mjs || echo "記録できませんでした"
       - name: 今日走る選手の近況
         run: node tools/make_state.mjs
       - name: 学習し直し（毎週月曜・または手動）

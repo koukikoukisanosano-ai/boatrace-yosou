@@ -50,8 +50,9 @@ def fill_vc(df: pd.DataFrame, vc: dict) -> pd.DataFrame:
 
 
 def make_clf(n_iter: int) -> HistGradientBoostingClassifier:
+    # 小さめの木をたくさん（検証で 31葉より少し良かった）
     return HistGradientBoostingClassifier(
-        learning_rate=0.05, max_iter=n_iter, max_leaf_nodes=31, min_samples_leaf=60,
+        learning_rate=0.05, max_iter=n_iter, max_leaf_nodes=15, min_samples_leaf=40,
         l2_regularization=1.0, max_bins=255, early_stopping=False, random_state=0,
     )
 
@@ -112,7 +113,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--work", default=str(ROOT / "work"))
     ap.add_argument("--valid-from", default="", help="検証に使う期間の開始日（空なら最新日の60日前）")
-    ap.add_argument("--iters", type=int, default=600)
+    ap.add_argument("--iters", type=int, default=1000)
     ap.add_argument("--final", action="store_true")
     ap.add_argument("--features", default="", help="使う特徴量をカンマ区切りで（比較用）")
     ap.add_argument("--drop", default="", help="除く特徴量をカンマ区切りで（比較用）")
@@ -156,7 +157,10 @@ def main() -> None:
         for i, pr in enumerate(clf.staged_predict_proba(Xv), start=1):
             if i % 25 == 0 or i == a.iters:
                 p = np.clip(pr[:, 1], 1e-9, 1 - 1e-9)
-                ll = float(-(y_va * np.log(p) + (1 - y_va) * np.log(1 - p)).mean())
+                if name == "win":  # 1着はレース内で合計1にしたときの、勝った艇の確率で比べる
+                    ll = race_metrics(va, p)["logloss_winner"]
+                else:
+                    ll = float(-(y_va * np.log(p) + (1 - y_va) * np.log(1 - p)).mean())
                 curve.append((i, round(ll, 5)))
                 if ll < best_ll:
                     best, best_ll = i, ll

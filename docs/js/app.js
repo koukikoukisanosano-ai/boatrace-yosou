@@ -10,7 +10,7 @@ const MARKS = ['◎', '○', '▲', '△'];
 const state = {
   date: jstToday(), model: null, snap: null, snapNote: '', races: [], preds: new Map(),
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
-  error: '', liveError: false, loading: false, loadedAt: null,
+  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true,
 };
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -43,7 +43,9 @@ async function loadSnapshot(ymd) {
     const { json } = await getJSON(`data/state/${compact(ymd)}.json`, 'no-cache');
     state.snap = new Snapshot(json.snapshot || json);
     state.snapNote = '';
+    state.snapExact = true;
   } catch (e) {
+    state.snapExact = false;
     try {
       const { json } = await getJSON('data/state/latest.json', 'no-cache');
       state.snap = new Snapshot(json.snapshot || json);
@@ -106,6 +108,7 @@ async function refresh(full = false) {
   try {
     await loadModel();
     if (full || !state.snap) await loadSnapshot(state.date);
+    if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
     mergeLive(races, live);
     state.races = races;
@@ -331,11 +334,27 @@ function renderScore(rs) {
     const tp = r.payouts.trifecta || [];
     for (const t of pr.trifecta.slice(0, 5)) { cost += 100; const x = tp.find((p) => p.combo === t.combo); if (x) ret += x.amount; }
   }
+  const m = state.model || {};
+  let caveat = '';
+  if (m.trained_until && state.date <= m.trained_until) caveat = 'この日のレースは予想モデルの学習に使われているため、実際より良い成績になります（参考）。ずるの無い成績は下の「毎日の記録」を見てください。';
+  else if (!state.snapExact) caveat = 'この日の選手の近況データが無いため、別の日の近況で計算しています（参考）。';
   return `<section class="score"><h2>答え合わせ（${done.length}レース）</h2><div class="grid">
     <div><div class="k">1着の的中</div><div class="v">${pct(win / done.length)}<small>%</small></div></div>
     <div><div class="k">3連単 上位5点の的中</div><div class="v">${pct(tri5 / done.length)}<small>%</small></div></div>
     <div><div class="k">上位5点を100円ずつ</div><div class="v">${pct(ret / cost)}<small>%回収</small></div></div>
-  </div></section>`;
+  </div>${caveat ? `<p class="explain">${caveat}</p>` : ''}</section>`;
+}
+
+// 毎日の記録（その日の朝の時点の近況とモデルで予想し直した、ずるの無い成績）
+function renderRecord() {
+  const days = (state.report && state.report.days) || [];
+  if (!days.length) return '<section class="score"><h2>毎日の記録</h2><p class="explain">毎朝、前日の答え合わせを自動で記録します（明日の朝から表示されます）。</p></section>';
+  const recent = days.slice(-14).reverse();
+  const tot = days.slice(-30).reduce((a, d) => { a.r += d.races; a.w += d.top1; a.t5 += d.tri5; a.ret += d.tri5Ret; return a; }, { r: 0, w: 0, t5: 0, ret: 0 });
+  const rows = recent.map((d) => `<tr><td>${+d.date.slice(5, 7)}/${+d.date.slice(8)}</td><td>${d.races}</td><td>${pct(d.top1 / d.races)}%</td><td>${pct(d.tri5 / d.races)}%</td><td>${pct(d.tri5Ret / (d.races * 500))}%</td></tr>`).join('');
+  return `<section class="score"><h2>毎日の記録（直近${Math.min(days.length, 30)}日: 1着 ${pct(tot.w / tot.r, 1)}%、3連単5点 的中 ${pct(tot.t5 / tot.r, 1)}%、回収 ${pct(tot.ret / (tot.r * 500))}%）</h2>
+    <table class="rec"><thead><tr><th>日付</th><th>レース</th><th>1着</th><th>3連単5点</th><th>回収</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="explain">その日の朝の時点のデータと予想モデルで計算し直した成績です（後から分かった結果は使っていません）。</p></section>`;
 }
 
 function render() {
@@ -348,7 +367,7 @@ function render() {
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
-  if (state.view === 'done') html += renderScore(rs);
+  if (state.view === 'done') html += renderScore(rs) + renderRecord();
   if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。「終了・答え合わせ」で結果を見られます。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;

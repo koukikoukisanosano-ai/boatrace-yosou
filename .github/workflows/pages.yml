@@ -31,3 +31,10 @@ jobs:
           path: docs
       - id: deploy
         uses: actions/deploy-pages@v4
+        continue-on-error: true
+      # GitHub側の一時的なエラーで失敗したときは少し待ってもう一度
+      - if: steps.deploy.outcome == 'failure'
+        run: sleep 30
+      - id: deploy2
+        if: steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@v4
