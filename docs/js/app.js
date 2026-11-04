@@ -361,8 +361,9 @@ function renderFooter() {
   const v = (m.valid && m.valid.full) || {};
   const ev = m.evaluation || {};
   const lines = [];
-  lines.push(`予想モデル: ${m.trained_until || '-'} までの約${Math.round(((v.n_train_races || 0) + (v.n_valid_races || 0)) / 1000) || '-'}千レースで学習（スタート展示・展示タイム・チルト・部品交換・気象・選手とモーターの近況を使用）。`);
-  if (ev.top1) lines.push(`過去の検証（${ev.period ? ev.period[0] : ''}以降 ${ev.races}レース）: 1着の的中 ${pct(ev.top1, 1)}%、3連単 上位5点の的中 ${pct(ev.trifecta['5'].hit, 1)}%、上位5点を買い続けた回収率 ${pct(ev.trifecta['5'].roi)}%。`);
+  const n = (v.n_train_races || 0) + (v.n_valid_races || 0);
+  lines.push(`予想モデル: ${m.trained_until || '-'} までの約${n ? (n / 10000).toFixed(1) : '-'}万レースで学習（スタート展示・展示タイム・チルト・部品交換・気象・選手とモーターの近況を使用）。`);
+  if (ev.top1) lines.push(`学習に使っていないレースでの検証（${ev.period ? `${ev.period[0]}〜${ev.period[1]}` : ''}、${ev.races.toLocaleString()}レース）: 1着の的中 ${pct(ev.top1, 1)}%、3連単 上位5点の的中 ${pct(ev.trifecta['5'].hit, 1)}%、上位5点を買い続けた場合の回収率 ${pct(ev.trifecta['5'].roi)}%。`);
   lines.push('データ: Boatrace Open API（非公式・約10分おき更新）と、公式サイトから自動で取った直前情報。予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。');
   $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
 }

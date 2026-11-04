@@ -149,6 +149,7 @@ class Live:
         self.tried: dict[str, float] = {}
         self.dirty = False
         self.unpushed = False
+        self.need_deploy = False
         self.last_push = 0.0
         self.stats = {"requests": 0, "captured": 0, "errors": 0}
 
@@ -268,11 +269,17 @@ class Live:
         if self.unpushed:
             return  # 次のループでもう一度
         self.last_push = time.time()
-        # GitHub Pages に反映（別のワークフローで公開）
+        self.need_deploy = True
+
+    def deploy(self):
+        """GitHub Pages に反映（別のワークフローで公開）。失敗したら次のループでもう一度"""
+        if not self.need_deploy or not self.push:
+            return
         r = subprocess.run(["gh", "workflow", "run", "pages.yml", "--ref", "main"], cwd=ROOT, capture_output=True, text=True)
         if r.returncode != 0:
-            log("公開の依頼に失敗:", r.stderr.strip()[:200])
+            log("公開の依頼に失敗（次の回にもう一度）:", r.stderr.strip()[:200])
         else:
+            self.need_deploy = False
             log("保存して公開を依頼しました")
 
     def run(self, max_minutes: float, once: bool):
@@ -292,6 +299,7 @@ class Live:
             for x in self.targets(now)[:6]:
                 self.capture(x)
             self.publish()
+            self.deploy()
             if once:
                 break
             if time.time() - started > max_minutes * 60:
@@ -299,6 +307,7 @@ class Live:
                 break
             time.sleep(20)
         self.publish()
+        self.deploy()
         log("集計:", json.dumps(self.stats, ensure_ascii=False))
 
 
