@@ -4,3 +4,4 @@ lxml>=5.0
 numpy>=1.26
 pandas>=2.2
 scikit-learn>=1.5
+scipy>=1.11

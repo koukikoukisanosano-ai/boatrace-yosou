@@ -23,10 +23,13 @@ from concurrent.futures import ThreadPoolExecutor
 import unicodedata
 import warnings
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path  # noqa: F811
 
 import requests
 from bs4 import BeautifulSoup
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import odds_parse  # noqa: E402
 
 try:
     from bs4 import XMLParsedAsHTMLWarning
@@ -44,6 +47,7 @@ INTERVAL = 1.0          # 公式サイトへのリクエストを始める間隔
 WORKERS = 3             # 同時に取りに行く数
 WINDOW_BEFORE = 20      # 締切の何分前から取りに行くか
 RETRY_SEC = 70          # まだ出ていなかったレースを次に見に行くまでの秒数（締切10分前を切ったら40秒）
+ODDS_FROM, ODDS_TO = 7.0, 2.0   # 締切の何分前のオッズ（3連単）を取るか（この間に1回）
 
 
 def log(*a):
@@ -166,7 +170,9 @@ class Live:
         self.day = day
         p = self.path()
         self.store = json.loads(p.read_text()) if p.exists() else {"date": day, "updated": None, "races": {}}
+        self.store.setdefault("odds", {})
         self.tried = {}
+        self.odds_tried = {}
 
     def session(self) -> requests.Session:
         s = getattr(self.local, "s", None)
@@ -236,6 +242,37 @@ class Live:
                 continue
             out.append(x)
         return out
+
+    def odds_targets(self, now: datetime) -> list[dict]:
+        """締切7〜2分前で、まだオッズを取っていないレース"""
+        out = []
+        for x in self.schedule:
+            key = f"{x['jcd']}-{x['rno']}"
+            mins = (x["deadline"] - now).total_seconds() / 60
+            if not (ODDS_TO <= mins <= ODDS_FROM) or key in self.store["odds"]:
+                continue
+            if time.time() - self.odds_tried.get(key, 0) < 50:
+                continue
+            out.append(x)
+        return out
+
+    def fetch_odds(self, x: dict):
+        html = self.official("odds3t", x["jcd"], x["rno"])
+        return x, (odds_parse.parse("odds3t", html) if html else None)
+
+    def capture_odds(self, xs: list[dict]):
+        for x in xs:
+            self.odds_tried[f"{x['jcd']}-{x['rno']}"] = time.time()
+        for x, od in self.pool.map(self.fetch_odds, xs):
+            if not od or not od.get("t") or sum(v is not None for v in od["t"]) < 60:
+                continue
+            key = f"{x['jcd']}-{x['rno']}"
+            now = datetime.now(JST)
+            self.store["odds"][key] = {"at": now.isoformat(timespec="seconds"), "site": od.get("at"), "t": od["t"]}
+            self.store["updated"] = now.isoformat(timespec="seconds")
+            self.dirty = True
+            self.stats["odds"] = self.stats.get("odds", 0) + 1
+            log(f"オッズ {key} 締切{x['deadline']:%H:%M}（あと{(x['deadline'] - now).total_seconds() / 60:.1f}分）")
 
     def fetch(self, x: dict):
         html = self.official("beforeinfo", x["jcd"], x["rno"])
@@ -317,6 +354,7 @@ class Live:
             if self.schedule and now > self.schedule[-1]["deadline"] + timedelta(minutes=5):
                 log("今日のレースは終わりました")
                 break
+            self.capture_odds(self.odds_targets(now)[:6])   # 締切が近いので先に
             self.capture_many(self.targets(now)[:12])
             self.publish()
             self.deploy()

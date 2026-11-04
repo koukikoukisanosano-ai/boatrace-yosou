@@ -420,7 +420,7 @@ const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 
 // model.json を読み込んだら一度だけ呼ぶ: モデルの特徴量の並びと FEATURES の対応を作る
 export function prepareModel(json) {
-  for (const key of ['full', 'pre']) {
+  for (const key of ['full', 'full_rw', 'pre', 'clogit']) {
     const slot = json[key];
     if (!slot) continue;
     slot.featureMap = (slot.features || FEATURES).map((name) => {
@@ -490,28 +490,114 @@ export function trifecta(pp, iters = 12) {
   return perms.map((p, k) => ({ idx: p, p: tri[k] / tot })).sort((x, y) => y.p - x.p);
 }
 
-// 3連単の確率から 2連単・3連複・2連複 を作る（艇番で表す）
+// 3連単の確率から 2連単・3連複・2連複・拡連複・単勝・複勝 を作る（艇番で表す）
 export function derived(tri, boats) {
-  const ex = {}; const trio = {}; const qu = {};
+  const ex = {}; const trio = {}; const qu = {}; const wide = {}; const win = {}; const place = {};
+  const add = (o, k, p) => { o[k] = (o[k] || 0) + p; };
   for (const t of tri) {
     const [a, b, c] = t.idx.map((i) => boats[i].waku);
-    const e = `${a}-${b}`; ex[e] = (ex[e] || 0) + t.p;
-    const s = [a, b, c].sort().join('='); trio[s] = (trio[s] || 0) + t.p;
-    const q = [a, b].sort().join('='); qu[q] = (qu[q] || 0) + t.p;
+    add(ex, `${a}-${b}`, t.p);
+    add(trio, [a, b, c].sort().join('='), t.p);
+    add(qu, [a, b].sort().join('='), t.p);
+    for (const [x, y] of [[a, b], [a, c], [b, c]]) add(wide, [x, y].sort().join('='), t.p);
+    add(win, String(a), t.p);
+    add(place, String(a), t.p); add(place, String(b), t.p);
   }
   const sorted = (o) => Object.entries(o).map(([k, p]) => ({ combo: k, p })).sort((x, y) => y.p - x.p);
-  return { exacta: sorted(ex), trio: sorted(trio), quinella: sorted(qu) };
+  return { exacta: sorted(ex), trio: sorted(trio), quinella: sorted(qu), wide: sorted(wide), win: sorted(win), place: sorted(place) };
+}
+
+// ------------------------------------------------------------------ 3連単の確率（並び順を固定した配列）
+function permsOf(n) {
+  const out = [];
+  for (let a = 0; a < n; a++) for (let b = 0; b < n; b++) if (b !== a) for (let c = 0; c < n; c++) if (c !== a && c !== b) out.push([a, b, c]);
+  return out;
+}
+function triArray(pp) { // 1着・2着内・3着内 → 3連単（固定の並び）
+  const order = trifecta(pp);
+  const n = pp.win.length; const perms = permsOf(n);
+  const pos = new Map(perms.map((p, k) => [p.join(','), k]));
+  const out = new Array(perms.length).fill(0);
+  for (const t of order) out[pos.get(t.idx.join(','))] = t.p;
+  return out;
+}
+function plArray(p1) { // 1着の確率だけから（Plackett-Luce）
+  const perms = permsOf(p1.length);
+  const out = perms.map(([a, b, c]) => p1[a] * p1[b] / Math.max(1 - p1[a], 1e-12) * p1[c] / Math.max(1 - p1[a] - p1[b], 1e-12));
+  const s = out.reduce((x, y) => x + y, 0);
+  return out.map((v) => v / s);
+}
+// 条件付きロジット: 標準化した特徴量の重み付きの和（欠けている値は平均扱い＋欠けている印）
+export function clogitStrength(m, Xfull) {
+  const map = m.featureMap; const F = map.length;
+  return Xfull.map((x) => {
+    let s = 0;
+    for (let k = 0; k < F; k++) { const v = x[map[k]]; if (Number.isFinite(v)) s += m.w[k] * (v - m.mu[k]) / m.sd[k]; }
+    for (let j = 0; j < m.miss.length; j++) { const v = x[map[m.miss[j]]]; if (!Number.isFinite(v)) s += m.w[F + j]; }
+    return s;
+  });
+}
+function softmax(s) { const mx = Math.max(...s); const e = s.map((v) => Math.exp(v - mx)); const t = e.reduce((a, b) => a + b, 0); return e.map((v) => v / t); }
+
+// 3連単の配列から各艇の 1着・2着内・3着内
+function placeFromTri(tri, n) {
+  const perms = permsOf(n);
+  const win = new Array(n).fill(0), top2 = new Array(n).fill(0), top3 = new Array(n).fill(0);
+  perms.forEach(([a, b, c], k) => { const p = tri[k]; win[a] += p; top2[a] += p; top2[b] += p; top3[a] += p; top3[b] += p; top3[c] += p; });
+  return { win, top2, top3 };
+}
+
+// 締切前のオッズ（3連単）と混ぜる: 予想^α × 市場^(1-α)
+export function blendOdds(tri, boats, tOdds, alpha) {
+  const perms = permsOf(boats.length);
+  const q = perms.map(([a, b, c]) => {
+    const o = tOdds[`${boats[a].waku}-${boats[b].waku}-${boats[c].waku}`];
+    return o && o > 0 ? 1 / o : 0;
+  });
+  const sq = q.reduce((x, y) => x + y, 0);
+  if (!(sq > 0) || q.filter((v) => v > 0).length < perms.length * 0.9) return null;
+  const out = tri.map((p, k) => Math.pow(Math.max(p, 1e-12), alpha) * Math.pow(Math.max(q[k] / sq, 1e-12), 1 - alpha));
+  const s = out.reduce((x, y) => x + y, 0);
+  return out.map((v) => v / s);
+}
+
+// 3連単のオッズ（data/odds と同じ並び: 1〜6 の順列の辞書順 120通り）→ {'1-2-3': 倍率}
+export function oddsMap(t) {
+  if (!t) return null;
+  const out = {}; let k = 0;
+  for (let a = 1; a <= 6; a++) for (let b = 1; b <= 6; b++) if (b !== a) for (let c = 1; c <= 6; c++) if (c !== a && c !== b) { out[`${a}-${b}-${c}`] = t[k]; k++; }
+  return out;
 }
 
 // まとめ: レース → 予想
-export function predictRace(race, model, hist) {
+//   直前情報あり: 3つの平均（機械学習・新しい日重視・条件付きロジット）。締切前のオッズがあれば混ぜる
+//   展示前: 展示前のモデル
+export function predictRace(race, model, hist, opts = {}) {
   const { boats, X, course } = buildFeatures(race, hist, model.vc);
   if (boats.length < 3) return null;
+  const n = boats.length;
   const usePv = race.preview !== 'none';
-  const m = usePv ? model.full : (model.pre || model.full);
-  const pp = placeProbs(m, X);
-  const raw = trifecta(pp);
-  const tri = raw.map((t) => ({ combo: t.idx.map((i) => boats[i].waku).join('-'), p: t.p }));
+  let tri;
+  const parts = [];
+  if (usePv && model.ensemble) {
+    for (const key of model.ensemble) {
+      const m = model[key];
+      if (!m) continue;
+      if (key === 'clogit') parts.push(plArray(softmax(clogitStrength(m, X))));
+      else parts.push(triArray(placeProbs(m, X)));
+    }
+    tri = parts[0].map((_, k) => parts.reduce((a, p) => a + p[k], 0) / parts.length);
+  } else {
+    tri = triArray(placeProbs(usePv ? model.full : (model.pre || model.full), X));
+  }
+  let withOdds = false;
+  if (usePv && race.odds && race.odds.t && opts.blend !== false) {
+    const b = blendOdds(tri, boats, oddsMap(race.odds.t), model.blend_alpha ?? 0.5);
+    if (b) { tri = b; withOdds = true; }
+  }
+  const perms = permsOf(n);
+  const raw = perms.map((p, k) => ({ idx: p, p: tri[k] })).sort((x, y) => y.p - x.p);
+  const trifectaList = raw.map((t) => ({ combo: t.idx.map((i) => boats[i].waku).join('-'), p: t.p }));
   const der = derived(raw, boats);
-  return { boats, course, X, probs: pp, trifecta: tri, ...der, withPreview: usePv };
+  return { boats, course, X, probs: placeFromTri(tri, n), trifecta: trifectaList, ...der, withPreview: usePv, withOdds };
 }

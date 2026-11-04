@@ -74,7 +74,7 @@ button { font: inherit; color: inherit; }
 .status .bad { color: var(--warn); }
 .tabs { display: flex; gap: 6px; margin-top: 8px; }
 .tabs button {
-  flex: 1; height: 34px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: 14px;
+  flex: 1; height: 34px; padding: 0 4px; border-radius: 9px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: 14px;
 }
 .tabs button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .venues { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; scrollbar-width: none; }
@@ -174,10 +174,21 @@ h3 small { font-weight: 500; color: var(--muted); margin-left: 6px; font-size: 1
 .score .k { font-size: 11.5px; color: var(--muted); }
 .score .v { font-family: var(--num); font-weight: 700; font-size: 22px; line-height: 1.1; }
 .score .v small { font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 2px; }
-.rec { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
-.rec th { font-weight: 500; color: var(--muted); font-size: 11.5px; text-align: right; padding: 2px 4px; }
-.rec td { font-family: var(--num); text-align: right; padding: 3px 4px; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
-.rec th:first-child, .rec td:first-child { text-align: left; }
+table.rec, table.rec-t { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+table.rec th, table.rec-t th { font-weight: 500; color: var(--muted); font-size: 11px; text-align: right; padding: 2px 4px; line-height: 1.25; vertical-align: bottom; }
+table.rec td, table.rec-t td { font-family: var(--num); text-align: right; padding: 4px 4px; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; vertical-align: top; }
+table.rec th:first-child, table.rec td:first-child, table.rec-t .l { text-align: left; font-family: var(--text); }
+table.rec-t td.l { font-size: 12.5px; line-height: 1.4; }
+table.rec-t td small { color: var(--muted); font-size: 11px; }
+table.rec-t tr.chosen td { background: color-mix(in srgb, var(--ok) 10%, transparent); }
+div.rec { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; margin: 6px 0; background: var(--surface); }
+div.rec.off { opacity: 0.6; }
+.rec-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 13.5px; }
+.rec-h small { color: var(--muted); font-size: 11.5px; }
+.rec-b { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 13px; }
+.rec-b .p { font-family: var(--num); font-weight: 700; }
+.bets .o b.good { color: var(--ok); }
+.research h3 { margin-top: 14px; }
 footer { max-width: 720px; margin: 22px auto 0; padding: 0 16px; font-size: 12px; color: var(--muted); }
 footer p { margin: 6px 0; }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--water); border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -1px; }
@@ -200,7 +211,8 @@ footer p { margin: 6px 0; }
   <div class="status" id="status"><span><span class="spin"></span> 読み込み中</span></div>
   <div class="tabs" role="group" aria-label="表示">
     <button type="button" data-view="upcoming" aria-pressed="true">締切前</button>
-    <button type="button" data-view="done" aria-pressed="false">終了・答え合わせ</button>
+    <button type="button" data-view="done" aria-pressed="false">答え合わせ</button>
+    <button type="button" data-view="research" aria-pressed="false">方法の比較</button>
   </div>
   <div class="venues" id="venues" role="group" aria-label="レース場"></div>
 </header>

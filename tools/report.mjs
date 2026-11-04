@@ -14,6 +14,9 @@ if (!dates.length) dates.push(jst(-1));
 
 const model = prepareModel(JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'model', 'model.json'), 'utf8')));
 const report = fs.existsSync(OUT) ? JSON.parse(fs.readFileSync(OUT, 'utf8')) : { days: [] };
+const researchFile = path.join(ROOT, 'docs', 'data', 'research.json');
+const recs = fs.existsSync(researchFile) ? (JSON.parse(fs.readFileSync(researchFile, 'utf8')).recommend || []) : [];
+const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 
 for (const ymd of dates) {
   const compact = ymd.replace(/-/g, '');
@@ -24,7 +27,11 @@ for (const ymd of dates) {
   const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   const snap = new Snapshot(st.snapshot || st);
   const races = normalizeDay(JSON.parse(zlib.gunzipSync(fs.readFileSync(dayFile)).toString('utf8')));
-  const s = { date: ymd, model: model.version, races: 0, top1: 0, tri1: 0, tri1Ret: 0, tri5: 0, tri5Ret: 0, ex1: 0, ex1Ret: 0 };
+  // その日に締切前に取ったオッズ（ページと同じように予想に混ぜる）
+  const liveFile = path.join(ROOT, 'docs', 'live', `${compact}.json`);
+  const live = fs.existsSync(liveFile) ? JSON.parse(fs.readFileSync(liveFile, 'utf8')) : null;
+  if (live && live.odds) for (const r of races) { const o = live.odds[`${r.jcd}-${r.rno}`]; if (o && o.t) r.odds = { t: o.t }; }
+  const s = { date: ymd, model: model.version, races: 0, top1: 0, tri1: 0, tri1Ret: 0, tri5: 0, tri5Ret: 0, ex1: 0, ex1Ret: 0, withOdds: 0, rec: {} };
   for (const r of races) {
     if (!r.hasResult || r.preview === 'none') continue;
     const tp = r.payouts.trifecta || [];
@@ -43,6 +50,21 @@ for (const ymd of dates) {
     if (hit5) s.tri5++;
     const e1 = pay(r.payouts.exacta || [], pr.exacta[0].combo);
     if (e1) { s.ex1++; s.ex1Ret += e1; }
+    if (pr.withOdds) s.withOdds++;
+    // おすすめの買い方の成績
+    for (const rc of recs) {
+      const list = pr[LIST[rc.bet]] || [];
+      if (!list.length || list[0].p < (rc.rule.conf || 0)) continue;
+      const x = s.rec[rc.title] || (s.rec[rc.title] = { bets: 0, hits: 0, ret: 0 });
+      const paid = r.payouts[rc.bet] || [];
+      const refunds = (r.refunds || []).map(Number);
+      for (const t of list.slice(0, rc.rule.k)) {
+        x.bets++;
+        if (t.combo.split(/[-=]/).map(Number).some((b) => refunds.includes(b))) { x.ret += 100; continue; }
+        const a = pay(paid, t.combo);
+        if (a) { x.hits++; x.ret += a; }
+      }
+    }
   }
   if (!s.races) { console.error(`${ymd}: 対象レースなし`); continue; }
   report.days = report.days.filter((d) => d.date !== ymd).concat([s]).sort((a, b) => (a.date < b.date ? -1 : 1)).slice(-120);

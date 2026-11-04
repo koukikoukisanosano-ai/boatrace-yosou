@@ -1,5 +1,5 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
-import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, FEATURE_INDEX, RANK_LABEL } from './core.js';
+import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, oddsMap, FEATURE_INDEX, RANK_LABEL } from './core.js';
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -10,7 +10,7 @@ const MARKS = ['◎', '○', '▲', '△'];
 const state = {
   date: jstToday(), model: null, snap: null, snapNote: '', races: [], preds: new Map(),
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
-  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true,
+  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null,
 };
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -84,7 +84,12 @@ async function loadLive(ymd) {
 function mergeLive(races, live) {
   state.liveAt = live && live.updated ? new Date(live.updated) : null;
   state.liveCount = 0;
-  if (!live || !live.races) return;
+  if (!live) return;
+  for (const r of races) {
+    const o = live.odds && live.odds[`${r.jcd}-${r.rno}`];
+    if (o && o.t) r.odds = { t: o.t, at: o.at ? new Date(o.at) : null, site: o.site || '' };
+  }
+  if (!live.races) return;
   for (const r of races) {
     const L = live.races[`${r.jcd}-${r.rno}`];
     if (!L || r.preview === 'full') continue;
@@ -109,6 +114,7 @@ async function refresh(full = false) {
     await loadModel();
     if (full || !state.snap) await loadSnapshot(state.date);
     if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
+    if (!state.research) { try { state.research = (await getJSON('data/research.json', 'no-cache')).json; } catch (e) { state.research = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
     mergeLive(races, live);
     state.races = races;
@@ -253,14 +259,18 @@ function raceDetail(r, pr) {
 
   const tp = (r.payouts.trifecta || []).map((x) => x.combo);
   const top = pr.trifecta.slice(0, 8);
-  let cum = 0;
-  const bets = top.map((t, k) => {
-    cum += t.p;
+  const om = r.odds ? oddsMap(r.odds.t) : null;
+  const bets = top.map((t) => {
     const hit = tp.includes(t.combo);
-    return `<div class="${hit ? 'hit' : ''}">${comboHtml(t.combo)}</div><div class="p ${hit ? 'hit' : ''}">${pct(t.p, 1)}%</div><div class="o ${hit ? 'hit' : ''}">目安 <b>${(1 / t.p).toFixed(1)}</b>倍</div>`;
+    const o = om && om[t.combo];
+    const right = o ? `<b>${o.toFixed(1)}</b>倍 期待値<b class="${o * t.p >= 1 ? 'good' : ''}">${(o * t.p).toFixed(2)}</b>` : `目安 <b>${(1 / t.p).toFixed(1)}</b>倍`;
+    return `<div class="${hit ? 'hit' : ''}">${comboHtml(t.combo)}</div><div class="p ${hit ? 'hit' : ''}">${pct(t.p, 1)}%</div><div class="o ${hit ? 'hit' : ''}">${right}</div>`;
   }).join('');
   const cum5 = pr.trifecta.slice(0, 5).reduce((a, t) => a + t.p, 0);
   const minor = (list, n, label) => `<div><b>${label}</b> ${list.slice(0, n).map((x) => `${comboHtml(x.combo)}<span class="p">${pct(x.p)}%</span>`).join('　')}</div>`;
+  const oddsNote = r.odds
+    ? `オッズは締切前の${r.odds.site ? ` ${esc(r.odds.site)}` : r.odds.at ? ` ${hhmm(r.odds.at)}` : ''}時点（公式サイトから自動取得）。予想にもこのオッズを混ぜています。期待値＝確率×オッズ（1より大きいと、予想どおりなら得）。締切直前にオッズは動くので、買う前にアプリで最新のオッズを確認してください。`
+    : '目安＝確率から計算したつり合いの倍率。実際のオッズがこれより高ければ、予想どおりなら得な買い目です（締切7〜2分前にオッズを自動取得すると、オッズと期待値を表示します）。';
 
   let result = '';
   if (r.hasResult) {
@@ -273,14 +283,39 @@ function raceDetail(r, pr) {
 
   return `<div class="cond">${cond.map((c) => `<span>${c}</span>`).join('')}<span>${src}</span></div>
     ${rows}
-    <h3>3連単の確率<small>上位5点で ${pct(cum5)}%</small></h3>
+    ${recommendHtml(r, pr)}
+    <h3>3連単の確率<small>上位5点で ${pct(cum5)}%${pr.withOdds ? '・オッズ反映' : ''}</small></h3>
     <div class="bets">${bets}</div>
-    <p class="explain">目安＝確率から計算したつり合いの倍率。実際のオッズがこれより高ければ、予想どおりなら得な買い目です。</p>
+    <p class="explain">${oddsNote}</p>
     <h3>ほかの券種</h3>
-    <div class="minor">${minor(pr.exacta, 3, '2連単')}${minor(pr.trio, 3, '3連複')}${minor(pr.quinella, 2, '2連複')}</div>
+    <div class="minor">${minor(pr.exacta, 3, '2連単')}${minor(pr.trio, 3, '3連複')}${minor(pr.quinella, 2, '2連複')}${minor(pr.wide, 3, '拡連複')}${minor(pr.place, 2, '複勝')}</div>
     <h3>予想の根拠</h3>
     <ul class="reasons">${reasons(r, pr).map((x) => `<li>${x}</li>`).join('')}</ul>
     ${result}`;
+}
+
+// おすすめの買い方: 予想方法の比較（research.json）で、開発期間で選び本番テスト期間で確かめた買い方
+const BET_LABEL = { trifecta: '3連単', trio: '3連複', exacta: '2連単', quinella: '2連複', quinella_place: '拡連複', win: '単勝', place: '複勝' };
+const BET_LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
+function recommendHtml(r, pr) {
+  const recs = (state.research && state.research.recommend) || [];
+  if (!recs.length || r.preview === 'none') return '';
+  const rows = [];
+  for (const rc of recs) {
+    const list = pr[BET_LIST[rc.bet]] || [];
+    if (!list.length) continue;
+    const conf = rc.rule.conf || 0;
+    const ok = list[0].p >= conf;
+    const picks = list.slice(0, rc.rule.k);
+    const paid = (r.payouts[rc.bet] || []).map((x) => x.combo);
+    const hit = r.hasResult && picks.some((x) => paid.includes(x.combo));
+    const res = r.hasResult && ok ? `<span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? '的中' : '外れ'}</span>` : '';
+    rows.push(`<div class="rec ${ok ? '' : 'off'}">
+      <div class="rec-h"><b>${esc(rc.title)}</b><small>過去の成績: 的中${pct(rc.hold.hit)}%・回収${pct(rc.hold.roi)}%</small></div>
+      <div class="rec-b">${ok ? picks.map((x) => `${comboHtml(x.combo)} <span class="p">${pct(x.p)}%</span>`).join('　') : `<span class="explain">このレースは対象外（本命の確率 ${pct(list[0].p)}% ＜ ${pct(conf)}%）</span>`} ${res}</div>
+    </div>`);
+  }
+  return rows.length ? `<h3>おすすめの買い方<small>過去の比較で選んだ方法</small></h3>${rows.join('')}` : '';
 }
 
 // 根拠: 特徴量の値から、目立つ点を文章にする
@@ -352,23 +387,54 @@ function renderRecord() {
   const recent = days.slice(-14).reverse();
   const tot = days.slice(-30).reduce((a, d) => { a.r += d.races; a.w += d.top1; a.t5 += d.tri5; a.ret += d.tri5Ret; return a; }, { r: 0, w: 0, t5: 0, ret: 0 });
   const rows = recent.map((d) => `<tr><td>${+d.date.slice(5, 7)}/${+d.date.slice(8)}</td><td>${d.races}</td><td>${pct(d.top1 / d.races)}%</td><td>${pct(d.tri5 / d.races)}%</td><td>${pct(d.tri5Ret / (d.races * 500))}%</td></tr>`).join('');
+  const recTot = {};
+  for (const d of days.slice(-30)) for (const [k, v] of Object.entries(d.rec || {})) { const t = recTot[k] || (recTot[k] = { bets: 0, hits: 0, ret: 0 }); t.bets += v.bets; t.hits += v.hits; t.ret += v.ret; }
+  const recRows = Object.entries(recTot).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.bets}</td><td>${pct(v.hits / Math.max(v.bets, 1))}%</td><td>${pct(v.ret / Math.max(v.bets * 100, 1))}%</td></tr>`).join('');
   return `<section class="score"><h2>毎日の記録（直近${Math.min(days.length, 30)}日: 1着 ${pct(tot.w / tot.r, 1)}%、3連単5点 的中 ${pct(tot.t5 / tot.r, 1)}%、回収 ${pct(tot.ret / (tot.r * 500))}%）</h2>
     <table class="rec"><thead><tr><th>日付</th><th>レース</th><th>1着</th><th>3連単5点</th><th>回収</th></tr></thead><tbody>${rows}</tbody></table>
+    ${recRows ? `<h3>おすすめの買い方の実際の成績（直近${Math.min(days.length, 30)}日）</h3><table class="rec"><thead><tr><th>買い方</th><th>点数</th><th>的中</th><th>回収</th></tr></thead><tbody>${recRows}</tbody></table>` : ''}
     <p class="explain">その日の朝の時点のデータと予想モデルで計算し直した成績です（後から分かった結果は使っていません）。</p></section>`;
+}
+
+// 予想方法の比較（research.json）
+function renderResearch() {
+  const R = state.research;
+  if (!R) return '<div class="note">比較の結果はまだありません。</div>';
+  const pt = (R.prob_table || []).filter((x) => x.method !== 'market');
+  const best = R.chosen_prob;
+  const probRows = pt.map((x) => `<tr class="${x.method === best ? 'chosen' : ''}"><td class="l">${esc(x.label)}${x.method === best ? '<br><b>← 採用</b>' : ''}</td>
+    <td>${pct(x.hold_win_top1, 1)}</td><td>${pct(x.hold_tri_top1, 1)}</td><td>${pct(x.hold_tri_top5, 1)}</td><td>${pct(x.hold_trio_top1, 1)}</td></tr>`).join('');
+  const mk = (R.prob_table || []).find((x) => x.method === 'market');
+  const recs = (R.recommend || []).map((x) => `<tr><td class="l">${esc(x.title)}<br><small>${esc(x.label)}</small></td><td>${pct(x.dev.roi)}%</td><td>${pct(x.hold.roi)}%<br><small>±${pct(x.hold.se)}</small></td><td>${pct(x.hold.hit)}%</td><td>${(x.hold.bets / Math.max(1, (R.hold_days || 1))).toFixed(0)}</td></tr>`).join('');
+  const types = Object.values(R.best_by_type_top || {}).map((x) => `<tr><td class="l">${esc(x.label)}<br><small>${esc(x.method_label || x.method)}</small></td><td>${pct(x.dev.roi)}%</td><td>${pct(x.hold.roi)}%<br><small>±${pct(x.hold.se)}</small></td><td>${pct(x.hold.hit)}%</td><td>${(x.hold.bets / Math.max(1, (R.hold_days || 1))).toFixed(0)}</td></tr>`).join('');
+  return `<section class="score research">
+    <h2>予想方法の比較（${esc(R.when || '')}）</h2>
+    <p class="explain">${esc(R.rule || '')}</p>
+    <p class="explain">開発期間: ${esc((R.dev || []).join('・'))}／本番テスト期間: ${esc((R.hold || []).join('・'))}。下の数字は本番テスト期間の成績。</p>
+    <h3>確率の出し方</h3>
+    <table class="rec-t"><thead><tr><th class="l">方法</th><th>1着</th><th>3連単<br>本命</th><th>3連単<br>上位5点</th><th>3連複<br>本命</th></tr></thead><tbody>${probRows}</tbody></table>
+    ${mk ? `<p class="explain">参考: 確定オッズ（締切後にしか分からない）だけで予想すると 1着${pct(mk.hold_win_top1, 1)}%・3連単本命${pct(mk.hold_tri_top1, 1)}%。締切前のオッズが取れたレースは、予想にオッズを混ぜています。</p>` : ''}
+    <h3>おすすめの買い方</h3>
+    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${recs}</tbody></table>
+    <h3>券種ごとの一番良い買い方</h3>
+    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${types}</tbody></table>
+    <p class="explain">${(R.n_strategies || 0).toLocaleString()}通りの買い方を比べました。どの買い方も、安定して回収率100%を超えるものは見つかっていません（舟券は売上の約25%が差し引かれるため）。単勝・複勝などの確定オッズを見て選ぶと回収率が200%を超えるように見えますが、締切直前の大口買いでオッズが歪んだレースを後から選んでいるだけで、実際には買えないため除いています。</p>
+  </section>`;
 }
 
 function render() {
   renderStatus();
   const venues = [...new Map(state.races.map((r) => [r.jcd, r.venue])).entries()].sort((a, b) => a[0] - b[0]);
-  $('#venues').innerHTML = [[0, 'すべて'], ...venues].map(([j, v]) => `<button type="button" data-venue="${j}" aria-pressed="${state.venue === j}">${esc(v)}</button>`).join('');
+  $('#venues').innerHTML = state.view === 'research' ? '' : [[0, 'すべて'], ...venues].map(([j, v]) => `<button type="button" data-venue="${j}" aria-pressed="${state.venue === j}">${esc(v)}</button>`).join('');
   document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
   const list = $('#list');
+  if (state.view === 'research') { list.innerHTML = renderResearch(); renderFooter(); return; }
   if (state.error && !state.races.length) { list.innerHTML = `<div class="note bad">${esc(state.error)}</div>`; return; }
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
   if (state.view === 'done') html += renderScore(rs) + renderRecord();
-  if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。「終了・答え合わせ」で結果を見られます。' : 'まだ終わったレースはありません。'}</div>`;
+  if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。「答え合わせ」で結果を見られます。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;
   renderFooter();
