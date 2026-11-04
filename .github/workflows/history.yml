@@ -1,0 +1,46 @@
+name: 過去データの取り込み
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: '開始日 (例 2026-01-01。空なら未取得分だけ)'
+        required: false
+      end:
+        description: '終了日 (空なら昨日)'
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-write
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: 取得
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.start }}" ]; then ARGS="$ARGS --from ${{ inputs.start }}"; fi
+          if [ -n "${{ inputs.end }}" ]; then ARGS="$ARGS --to ${{ inputs.end }}"; fi
+          python tools/fetch_openapi.py $ARGS
+      - name: 保存
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -q -m "過去データ更新 $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3 4; do git pull -q --rebase && git push -q && break; sleep 5; done
