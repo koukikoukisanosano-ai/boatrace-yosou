@@ -148,6 +148,7 @@ class Live:
         self.sched_at = 0.0
         self.tried: dict[str, float] = {}
         self.dirty = False
+        self.unpushed = False
         self.last_push = 0.0
         self.stats = {"requests": 0, "captured": 0, "errors": 0}
 
@@ -237,36 +238,42 @@ class Live:
         mins = (x["deadline"] - datetime.now(JST)).total_seconds() / 60
         log(f"取得 {key} 締切{x['deadline']:%H:%M}（あと{mins:.1f}分）")
 
+    def git(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+
     def publish(self):
-        if not self.dirty:
+        """書き出して保存（push）し、ページの公開を依頼する。push できなかった分は次の回にまとめて送る"""
+        if self.dirty:
+            LIVE_DIR.mkdir(parents=True, exist_ok=True)
+            self.path().write_text(json.dumps(self.store, ensure_ascii=False, separators=(",", ":")))
+            self.dirty = False
+            if self.push:
+                rel = str(self.path().relative_to(ROOT))
+                self.git("add", rel)
+                if self.git("diff", "--cached", "--quiet").returncode != 0:
+                    self.git("commit", "-q", "-m", f"直前情報 {datetime.now(JST):%H:%M}")
+                    self.unpushed = True
+        if not self.push or not getattr(self, "unpushed", False):
             return
-        LIVE_DIR.mkdir(parents=True, exist_ok=True)
-        self.path().write_text(json.dumps(self.store, ensure_ascii=False, separators=(",", ":")))
-        self.dirty = False
-        if not self.push:
-            return
-        rel = str(self.path().relative_to(ROOT))
-        ok = False
-        for i in range(5):
-            try:
-                subprocess.run(["git", "add", rel], check=True, cwd=ROOT)
-                if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT).returncode == 0:
-                    return
-                subprocess.run(["git", "commit", "-q", "-m", f"直前情報 {datetime.now(JST):%H:%M}"], check=True, cwd=ROOT)
-                subprocess.run(["git", "pull", "-q", "--rebase", "-X", "theirs"], check=True, cwd=ROOT)
-                subprocess.run(["git", "push", "-q"], check=True, cwd=ROOT)
-                ok = True
+        for i in range(4):
+            pull = self.git("pull", "-q", "--rebase", "-X", "theirs")
+            if pull.returncode != 0:
+                self.git("rebase", "--abort")
+            r = self.git("push", "-q")
+            if r.returncode == 0:
+                self.unpushed = False
                 break
-            except subprocess.CalledProcessError as e:
-                log("保存に失敗、やり直し:", e)
-                subprocess.run(["git", "rebase", "--abort"], cwd=ROOT, stderr=subprocess.DEVNULL)
-                time.sleep(4 * (i + 1))
-        if ok:
-            self.last_push = time.time()
-            # GitHub Pages に反映（別のワークフローで公開）
-            r = subprocess.run(["gh", "workflow", "run", "pages.yml", "--ref", "main"], cwd=ROOT, capture_output=True, text=True)
-            if r.returncode != 0:
-                log("公開の依頼に失敗:", r.stderr.strip()[:200])
+            log("保存に失敗（やり直します）:", (r.stderr or pull.stderr).strip().splitlines()[-1:] )
+            time.sleep(3 * (i + 1))
+        if self.unpushed:
+            return  # 次のループでもう一度
+        self.last_push = time.time()
+        # GitHub Pages に反映（別のワークフローで公開）
+        r = subprocess.run(["gh", "workflow", "run", "pages.yml", "--ref", "main"], cwd=ROOT, capture_output=True, text=True)
+        if r.returncode != 0:
+            log("公開の依頼に失敗:", r.stderr.strip()[:200])
+        else:
+            log("保存して公開を依頼しました")
 
     def run(self, max_minutes: float, once: bool):
         started = time.time()
