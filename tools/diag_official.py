@@ -49,7 +49,7 @@ def main() -> int:
             hh, mm = map(int, t.split(":"))
             dl = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
             mins = (dl - now).total_seconds() / 60
-            if -5 <= mins <= 25 and (best is None or abs(mins - 8) < abs(best[2] - 8)):
+            if 1 <= mins <= 25 and (best is None or abs(mins - 4) < abs(best[2] - 4)):
                 best = (jcd, i, mins)
         if len(jcds) > 6 and best:
             break
@@ -58,7 +58,7 @@ def main() -> int:
         jcd, rno = jcds[0], 12
     else:
         jcd, rno = best[0], best[1]
-    for page in ("beforeinfo", "racelist", "odds3t", "raceresult"):
+    for page in ("beforeinfo", "racelist", "odds3t", "odds3f", "odds2tf", "oddsk", "oddstf", "raceresult"):
         r = get(page, rno=rno, jcd=jcd, hd=hd)
         (OUT / f"{page}.html").write_bytes(r.content)
         if page == "beforeinfo":
