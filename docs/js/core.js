@@ -1,0 +1,508 @@
+// 競艇予想のコア（データの整形・近況・特徴量・モデル・3連単の確率）
+// スマホのブラウザと、学習データを作る Node の両方でこの同じファイルを使う（学習と予想で計算をそろえるため）
+
+export const VENUES = {
+  1: '桐生', 2: '戸田', 3: '江戸川', 4: '平和島', 5: '多摩川', 6: '浜名湖', 7: '蒲郡', 8: '常滑',
+  9: '津', 10: '三国', 11: 'びわこ', 12: '住之江', 13: '尼崎', 14: '鳴門', 15: '丸亀', 16: '児島',
+  17: '宮島', 18: '徳山', 19: '下関', 20: '若松', 21: '芦屋', 22: '福岡', 23: '唐津', 24: '大村',
+};
+export const RANK_LABEL = { 1: 'A1', 2: 'A2', 3: 'B1', 4: 'B2' };
+const NaN_ = Number.NaN;
+
+const num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(+v)) ? null : +v;
+const nz = (v) => (v === null || v === 0) ? null : v; // 当地成績なし(0)は欠損扱い
+
+// ------------------------------------------------------------------ 日付
+export function dayNumber(dateStr) { // 'YYYY-MM-DD' or 'YYYYMMDD' -> 1970-01-01 からの日数
+  const s = String(dateStr).replace(/-/g, '');
+  return Math.round(Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)) / 86400000);
+}
+export function dayString(n) {
+  const d = new Date(n * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+// ------------------------------------------------------------------ データの整形（Boatrace Open API v1 → レース）
+export function normalizeDay(j) {
+  const out = [];
+  const st = (j && j.programs && j.programs.stadiums) || {};
+  for (const [jcd, s] of Object.entries(st)) {
+    for (const [rno, rc] of Object.entries((s && s.races) || {})) {
+      const r = normalizeRace(rc, +jcd, +rno);
+      if (r) out.push(r);
+    }
+  }
+  out.sort(raceOrder);
+  return out;
+}
+
+export function raceOrder(a, b) {
+  if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+  if (a.closedAt !== b.closedAt) return a.closedAt < b.closedAt ? -1 : 1;
+  return a.jcd - b.jcd || a.rno - b.rno;
+}
+
+const MAJOR_PARTS = ['ピストン', 'シリンダ', 'キャブ', 'シャフト', 'ギヤ', '電気', 'キャリボ'];
+
+export function normalizeRace(rc, jcd, rno) {
+  if (!rc) return null;
+  const pv = rc.preview || {};
+  const res = rc.result || {};
+  const boats = [];
+  for (let w = 1; w <= 6; w++) {
+    const x = (rc.racers || {})[w];
+    if (!x) continue;
+    const p = (pv.racers || {})[w] || {};
+    const r = (res.racers || {})[w] || {};
+    const placeNo = num(r.place_number);
+    boats.push({
+      waku: w, num: num(x.number), name: x.name || '', rank: num(x.rank_number), branch: x.branch_number_source || '',
+      age: num(x.age), weight: num(x.weight), F: num(x.flying_count), L: num(x.late_count), avgST: num(x.average_start_timing),
+      natWin: num(x.national_win_rate), nat2: num(x.national_top_2_percent), nat3: num(x.national_top_3_percent),
+      locWin: nz(num(x.local_win_rate)), loc2: num(x.local_win_rate) ? num(x.local_top_2_percent) : null,
+      loc3: num(x.local_win_rate) ? num(x.local_top_3_percent) : null,
+      motorNo: num(x.motor_number), motor2: num(x.motor_top_2_percent), motor3: num(x.motor_top_3_percent),
+      boatNo: num(x.boat_number), boat2: num(x.boat_top_2_percent), boat3: num(x.boat_top_3_percent),
+      // 直前情報（スタート展示・展示航走）
+      exCourse: num(p.course_number), exST: num(p.start_timing), exSTsrc: p.start_timing_source || '',
+      exTime: num(p.exhibition_time), tilt: num(p.tilt_adjustment), exWeight: num(p.weight),
+      weightAdj: num(p.weight_adjustment), propNew: p.propeller ? 1 : 0,
+      parts: (p.parts || []).map((pt) => pt.number_source + (pt.quantity ? String(pt.quantity) : '')),
+      // 結果
+      course: num(r.course_number), st: num(r.start_timing), stSrc: r.start_timing_source || '',
+      place: placeNo !== null && placeNo >= 1 && placeNo <= 6 ? placeNo : null, placeSrc: r.place_number_source || '',
+    });
+  }
+  const pays = {};
+  for (const [k, arr] of Object.entries(res.payouts || {})) {
+    pays[k] = (arr || []).map((p) => ({ combo: p.combination, amount: num(p.amount) }));
+  }
+  const hasResult = boats.some((b) => b.place === 1);
+  const race = {
+    id: `${String(rc.date || '').replace(/-/g, '')}-${jcd}-${rno}`,
+    date: rc.date, jcd, rno, closedAt: (rc.closed_at || '').slice(11, 16), venue: VENUES[jcd] || String(jcd),
+    grade: num(rc.grade_number), gradeSrc: rc.grade_number_source || '', distance: num(rc.distance),
+    day: num(rc.day_number), title: rc.title || '', subtitle: rc.subtitle || '',
+    wind: num(pv.wind_speed), windDir: num(pv.wind_direction_number), wave: num(pv.wave_height),
+    weather: num(pv.weather_number), airTemp: num(pv.air_temperature), waterTemp: num(pv.water_temperature),
+    boats, payouts: pays, refunds: res.refunds || [], technique: num(res.technique_number), hasResult,
+  };
+  race.preview = previewState(race);
+  return race;
+}
+
+// 欠場（直前情報が空で、結果も「欠」）
+export function isAbsent(b) {
+  return b.placeSrc === '欠' || (b.exTime === null && b.exCourse === null && b.placeSrc === '' && false);
+}
+
+// 直前情報の状態: 'full' 全艇そろう / 'partial' 一部（欠場艇を除けばそろう） / 'none' まだ
+export function previewState(race) {
+  const have = race.boats.filter((b) => b.exTime !== null && b.exCourse !== null);
+  if (have.length === race.boats.length && have.length > 0) return 'full';
+  if (have.length >= 3) return 'partial';
+  return 'none';
+}
+
+// 予想に使う艇（欠場を除く）。直前情報がそろっていれば、展示の無い艇は欠場とみなす
+export function activeBoats(race) {
+  return race.boats.filter((b) => {
+    if (b.placeSrc === '欠') return false;
+    if (race.preview === 'partial' && b.exTime === null && b.exCourse === null) return false;
+    return true;
+  });
+}
+
+// ------------------------------------------------------------------ 近況（前日までの結果）
+// 選手（登録番号）とモーター（場×番号）の成績を、日付順に取り込みながら持つ
+const COURSE_PRIOR = [null, [0.55, 0.72, 0.82], [0.14, 0.40, 0.58], [0.12, 0.35, 0.55], [0.11, 0.30, 0.50], [0.06, 0.20, 0.38], [0.03, 0.12, 0.27]];
+const shrink = (hits, n, prior, k) => (hits + k * prior) / (n + k);
+
+export class History {
+  constructor(state) {
+    this.p = (state && state.p) || {}; // num -> {r: [[day, jcd, course, place(7=着外), st]], c: [[n,w,t2,t3]x6], v: {jcd: [n,w]}}
+    this.m = (state && state.m) || {}; // 'jcd-motor' -> [[day, place], ...]
+    this.lastDay = (state && state.lastDay) || 0;
+  }
+
+  addRace(race) {
+    if (!race.hasResult) return;
+    const d = dayNumber(race.date);
+    for (const b of race.boats) {
+      if (b.placeSrc === '欠' || b.num === null) continue;
+      const place = b.place !== null ? b.place : 7;
+      const course = b.course || b.exCourse || b.waku;
+      const st = (b.st !== null && b.st >= 0) ? b.st : (b.st !== null && b.st < 0 ? -1 : null); // -1 = F
+      let p = this.p[b.num];
+      if (!p) p = this.p[b.num] = { r: [], c: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], v: {} };
+      p.r.push([d, race.jcd, course, place, st]);
+      if (p.r.length > 40) p.r.splice(0, p.r.length - 40);
+      if (course >= 1 && course <= 6) {
+        const c = p.c[course - 1];
+        c[0] += 1; c[1] += place === 1; c[2] += place <= 2; c[3] += place <= 3;
+      }
+      const v = p.v[race.jcd] || (p.v[race.jcd] = [0, 0]);
+      v[0] += 1; v[1] += place === 1;
+      if (b.motorNo !== null) {
+        const key = `${race.jcd}-${b.motorNo}`;
+        const m = this.m[key] || (this.m[key] = []);
+        m.push([d, place]);
+        while (m.length && d - m[0][0] > 60) m.shift();
+      }
+    }
+    this.lastDay = Math.max(this.lastDay, d);
+  }
+
+  // その日のレース用の近況（d より前の結果だけを使う）
+  racer(num, d, jcd) {
+    const p = this.p[num];
+    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null };
+    if (!p) return out;
+    const recs = p.r.filter((r) => r[0] < d);
+    if (!recs.length) return out;
+    const last10 = recs.slice(-10);
+    const fins = last10.map((r) => r[3]);
+    out.n90 = recs.filter((r) => d - r[0] <= 90).length;
+    out.avgFin = (fins.reduce((a, b) => a + b, 0) + 3 * 3.6) / (fins.length + 3);
+    out.win10 = shrink(fins.filter((f) => f === 1).length, fins.length, 1 / 6, 3);
+    out.top3_10 = shrink(fins.filter((f) => f <= 3).length, fins.length, 0.5, 3);
+    // 今節（同じ場で、間を空けずに続いている出走）
+    const setsu = [];
+    for (let i = recs.length - 1; i >= 0; i--) {
+      const r = recs[i];
+      if (r[1] !== jcd || d - r[0] > 7) break;
+      setsu.push(r[3]);
+    }
+    out.setsuN = setsu.length;
+    out.setsuAvg = setsu.length ? setsu.reduce((a, b) => a + b, 0) / setsu.length : NaN_;
+    out.daysOff = Math.min(d - recs[recs.length - 1][0], 60);
+    const sts = last10.map((r) => r[4]).filter((s) => s !== null && s >= 0);
+    if (sts.length >= 3) {
+      const m = sts.reduce((a, b) => a + b, 0) / sts.length;
+      out.stAvg = m;
+      out.stStd = Math.sqrt(sts.reduce((a, b) => a + (b - m) * (b - m), 0) / sts.length);
+    }
+    out.f180 = recs.filter((r) => r[4] === -1 && d - r[0] <= 180).length;
+    const v = p.v[jcd] || [0, 0];
+    out.venueWin = shrink(v[1], v[0], 1 / 6, 6);
+    out.course = p.c;
+    return out;
+  }
+
+  motor(jcd, motorNo, d) {
+    const m = this.m[`${jcd}-${motorNo}`];
+    const out = { avgFin: NaN_, win: NaN_, n: 0 };
+    if (!m) return out;
+    const recs = m.filter((r) => r[0] < d && d - r[0] <= 45);
+    if (!recs.length) return out;
+    const fins = recs.map((r) => r[1]);
+    out.n = fins.length;
+    out.avgFin = (fins.reduce((a, b) => a + b, 0) + 6 * 3.6) / (fins.length + 6);
+    out.win = shrink(fins.filter((f) => f === 1).length, fins.length, 1 / 6, 6);
+    return out;
+  }
+
+  // その日に走る選手・モーターの分だけを書き出す（スマホで読む量を減らす）
+  snapshotFor(races) {
+    const out = { r: {}, m: {} };
+    for (const race of races) {
+      const d = dayNumber(race.date);
+      for (const b of race.boats) {
+        if (b.num !== null && !out.r[b.num]) {
+          const x = this.racer(b.num, d, race.jcd);
+          const vjcd = {};
+          vjcd[race.jcd] = x.venueWin;
+          out.r[b.num] = compactRacer(x, race.jcd);
+        } else if (b.num !== null) {
+          const x = this.racer(b.num, d, race.jcd);
+          out.r[b.num].v = out.r[b.num].v || {};
+          out.r[b.num].v[race.jcd] = [round4(x.venueWin), x.setsuN, round4(x.setsuAvg)];
+        }
+        if (b.motorNo !== null) {
+          const k = `${race.jcd}-${b.motorNo}`;
+          if (!out.m[k]) { const m = this.motor(race.jcd, b.motorNo, d); out.m[k] = [round4(m.avgFin), round4(m.win), m.n]; }
+        }
+      }
+    }
+    return out;
+  }
+}
+
+const round4 = (x) => (Number.isFinite(x) ? Math.round(x * 1e6) / 1e6 : null);
+function compactRacer(x, jcd) {
+  const v = {}; v[jcd] = [round4(x.venueWin), x.setsuN, round4(x.setsuAvg)];
+  return {
+    a: [round4(x.n90), round4(x.avgFin), round4(x.win10), round4(x.top3_10), round4(x.daysOff), round4(x.stAvg), round4(x.stStd), round4(x.f180)],
+    c: x.course, v,
+  };
+}
+
+// スナップショット（日別に書き出した近況）を History と同じ形で引けるようにする
+export class Snapshot {
+  constructor(snap) { this.s = snap || { r: {}, m: {} }; }
+  racer(num, d, jcd) {
+    const x = this.s.r[num];
+    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null };
+    if (!x) return out;
+    const f = (v) => (v === null || v === undefined ? NaN_ : v);
+    [out.n90, out.avgFin, out.win10, out.top3_10, out.daysOff, out.stAvg, out.stStd, out.f180] = x.a.map(f);
+    out.course = x.c || null;
+    const v = (x.v || {})[jcd];
+    if (v) { out.venueWin = f(v[0]); out.setsuN = v[1] || 0; out.setsuAvg = f(v[2]); }
+    else { out.venueWin = 1 / 6; out.setsuN = 0; out.setsuAvg = NaN_; }
+    return out;
+  }
+  motor(jcd, motorNo) {
+    const m = this.s.m[`${jcd}-${motorNo}`];
+    if (!m) return { avgFin: NaN_, win: NaN_, n: 0 };
+    return { avgFin: m[0] === null ? NaN_ : m[0], win: m[1] === null ? NaN_ : m[1], n: m[2] || 0 };
+  }
+}
+
+// ------------------------------------------------------------------ 特徴量
+export const FEATURES = [
+  // レース
+  'jcd', 'rno', 'grade', 'day', 'raceType', 'fixed', 'distance', 'wind', 'windSin', 'windCos', 'wave', 'weather', 'airTemp', 'waterTemp',
+  // 艇・選手
+  'waku', 'course', 'courseChanged', 'rank', 'age', 'weight', 'F', 'L', 'avgST',
+  'natWin', 'nat2', 'nat3', 'locWin', 'loc2', 'loc3', 'motor2', 'motor3', 'boat2', 'boat3',
+  // 直前情報
+  'exTime', 'exST', 'exSTF', 'tilt', 'weightAdj', 'propNew', 'partsRing', 'partsMajor',
+  // レース内の比較
+  'exTimeRank', 'exTimeDiff', 'exTimeToBest', 'exSTRank', 'exSTDiff', 'natWinRank', 'natWinDiff',
+  'motor2Rank', 'motor2Diff', 'avgSTRank', 'nBoats',
+  // 場×コース
+  'vcWin', 'vcTop2', 'vcTop3',
+  // 展開（並びで隣・内・外と比べる）
+  'exSTvsInner', 'exSTvsOuter', 'exSTvsC1', 'natWinVsInner', 'wallNatWin', 'innerMinNatWin', 'innerMeanNatWin',
+  'outerThreat', 'outerMaxNatWin', 'c1NatWinGap', 'exTimeVsInner', 'c1ExST', 'c1CourseWin',
+  // 近況
+  'pN90', 'pAvgFin', 'pWin10', 'pTop3', 'pCourseWin', 'pCourseTop2', 'pCourseTop3', 'pCourseN', 'pVenueWin',
+  'pSetsuAvg', 'pSetsuN', 'pDaysOff', 'pSTavg', 'pSTstd', 'pF180', 'stEst', 'stEstRank', 'stEstVsInner', 'stEstVsOuter',
+  'mAvgFin', 'mWin', 'mN', 'pAvgFinRank', 'pCourseWinRank',
+];
+export const FEATURE_INDEX = Object.fromEntries(FEATURES.map((f, i) => [f, i]));
+
+function raceType(race) {
+  const s = `${race.subtitle} `;
+  if (s.includes('優勝戦') && !s.includes('準優')) return 3;
+  if (s.includes('準優')) return 2;
+  if (/特選|選抜|特賞|ドリーム|記念|特別/.test(s)) return 1;
+  return 0;
+}
+
+function rankOf(vals, asc = true) { // 同順位は小さい方（method=min）。欠損は NaN
+  return vals.map((v) => {
+    if (!Number.isFinite(v)) return NaN_;
+    let r = 1;
+    for (const u of vals) if (Number.isFinite(u) && (asc ? u < v : u > v)) r++;
+    return r;
+  });
+}
+const mean = (arr) => { const a = arr.filter(Number.isFinite); return a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN_; };
+const minOf = (arr) => { const a = arr.filter(Number.isFinite); return a.length ? Math.min(...a) : NaN_; };
+const maxOf = (arr) => { const a = arr.filter(Number.isFinite); return a.length ? Math.max(...a) : NaN_; };
+const f = (v) => (v === null || v === undefined ? NaN_ : v);
+
+// race: 整形済みレース / hist: History か Snapshot / vc: 場×コースの率 {jcd: {course: [win,top2,top3]}}
+// 戻り値: { boats: 予想対象の艇, X: 各艇の特徴量（FEATURES の順の配列） }
+export function buildFeatures(race, hist, vc) {
+  const boats = activeBoats(race);
+  const n = boats.length;
+  const d = dayNumber(race.date);
+  const hasPv = race.preview !== 'none';
+  const wd = race.windDir;
+  const ang = (wd && wd >= 1 && wd <= 16) ? (wd - 1) * 2 * Math.PI / 16 : null;
+  const ws = f(race.wind);
+  const windSin = ang === null ? (wd === 17 ? 0 : NaN_) : Math.sin(ang) * ws;
+  const windCos = ang === null ? (wd === 17 ? 0 : NaN_) : Math.cos(ang) * ws;
+  const rt = raceType(race);
+  const fixed = /進入固定/.test(race.subtitle + race.title) ? 1 : 0;
+
+  // コース: 直前情報があればスタート展示の進入、無ければ枠番
+  const course = boats.map((b) => (hasPv && b.exCourse ? b.exCourse : b.waku));
+  const exTime = boats.map((b) => (hasPv ? f(b.exTime) : NaN_));
+  const exST = boats.map((b) => (hasPv ? f(b.exST) : NaN_));
+  const exSTok = exST.map((v) => (Number.isFinite(v) && v >= 0 ? v : NaN_));
+  const exSTforRank = exST.map((v) => (Number.isFinite(v) ? (v >= 0 ? v : 1.0) : NaN_)); // 展示Fは最下位扱い
+  const natWin = boats.map((b) => f(b.natWin));
+  const motor2 = boats.map((b) => f(b.motor2));
+  const avgST = boats.map((b) => f(b.avgST));
+
+  const hx = boats.map((b, i) => (b.num !== null ? hist.racer(b.num, d, race.jcd) : null));
+  const mx = boats.map((b) => (b.motorNo !== null ? hist.motor(race.jcd, b.motorNo, d) : { avgFin: NaN_, win: NaN_, n: 0 }));
+  const pCourse = boats.map((b, i) => {
+    const h = hx[i]; const c = course[i];
+    const prior = COURSE_PRIOR[c] || [1 / 6, 1 / 3, 1 / 2];
+    const cc = h && h.course ? h.course[c - 1] : null;
+    if (!cc) return [prior[0], prior[1], prior[2], 0];
+    return [shrink(cc[1], cc[0], prior[0], 6), shrink(cc[2], cc[0], prior[1], 6), shrink(cc[3], cc[0], prior[2], 6), cc[0]];
+  });
+  const stEst = boats.map((b, i) => (hx[i] && Number.isFinite(hx[i].stAvg) ? hx[i].stAvg : avgST[i]));
+  const pAvgFin = hx.map((h) => (h ? h.avgFin : NaN_));
+  const pCourseWin = pCourse.map((p) => p[0]);
+
+  const exTimeRank = rankOf(exTime, true);
+  const exSTRank = rankOf(exSTforRank, true);
+  const natWinRank = rankOf(natWin, false);
+  const motor2Rank = rankOf(motor2, false);
+  const avgSTRank = rankOf(avgST, true);
+  const stEstRank = rankOf(stEst, true);
+  const pAvgFinRank = rankOf(pAvgFin, true);
+  const pCourseWinRank = rankOf(pCourseWin, false);
+  const exTimeMean = mean(exTime); const exTimeMin = minOf(exTime);
+  const exSTMean = mean(exSTok); const natWinMean = mean(natWin); const motor2Mean = mean(motor2);
+
+  const byCourse = {};
+  course.forEach((c, i) => { if (!(c in byCourse)) byCourse[c] = i; });
+  const c1 = byCourse[1];
+
+  const X = boats.map((b, i) => {
+    const c = course[i];
+    const inner = []; for (let k = 1; k < c; k++) if (k in byCourse) inner.push(byCourse[k]);
+    const outer = []; for (const k of [c + 1, c + 2]) if (k in byCourse) outer.push(byCourse[k]);
+    const wi = byCourse[c - 1]; const wo = byCourse[c + 1];
+    const h = hx[i] || {};
+    const m = mx[i];
+    const vr = (vc && vc[race.jcd] && vc[race.jcd][c]) || (vc && vc[0] && vc[0][c]) || [NaN_, NaN_, NaN_];
+    const parts = b.parts || [];
+    const row = {
+      jcd: race.jcd, rno: race.rno, grade: f(race.grade), day: f(race.day), raceType: rt, fixed, distance: f(race.distance),
+      wind: ws, windSin, windCos, wave: f(race.wave), weather: f(race.weather), airTemp: f(race.airTemp), waterTemp: f(race.waterTemp),
+      waku: b.waku, course: c, courseChanged: c !== b.waku ? 1 : 0, rank: f(b.rank), age: f(b.age), weight: f(b.weight),
+      F: f(b.F), L: f(b.L), avgST: avgST[i], natWin: natWin[i], nat2: f(b.nat2), nat3: f(b.nat3),
+      locWin: f(b.locWin), loc2: f(b.loc2), loc3: f(b.loc3), motor2: motor2[i], motor3: f(b.motor3), boat2: f(b.boat2), boat3: f(b.boat3),
+      exTime: exTime[i], exST: exST[i], exSTF: Number.isFinite(exST[i]) ? (exST[i] < 0 ? 1 : 0) : NaN_,
+      tilt: hasPv ? f(b.tilt) : NaN_, weightAdj: hasPv ? f(b.weightAdj) : NaN_, propNew: hasPv ? b.propNew : NaN_,
+      partsRing: hasPv ? parts.filter((p) => p.startsWith('リング')).length : NaN_,
+      partsMajor: hasPv ? parts.filter((p) => MAJOR_PARTS.some((k) => p.startsWith(k))).length : NaN_,
+      exTimeRank: exTimeRank[i], exTimeDiff: exTime[i] - exTimeMean, exTimeToBest: exTime[i] - exTimeMin,
+      exSTRank: exSTRank[i], exSTDiff: exSTok[i] - exSTMean, natWinRank: natWinRank[i], natWinDiff: natWin[i] - natWinMean,
+      motor2Rank: motor2Rank[i], motor2Diff: motor2[i] - motor2Mean, avgSTRank: avgSTRank[i], nBoats: n,
+      vcWin: vr[0], vcTop2: vr[1], vcTop3: vr[2],
+      exSTvsInner: wi !== undefined ? exSTok[i] - exSTok[wi] : NaN_,
+      exSTvsOuter: wo !== undefined ? exSTok[i] - exSTok[wo] : NaN_,
+      exSTvsC1: c1 !== undefined && c1 !== i ? exSTok[i] - exSTok[c1] : NaN_,
+      natWinVsInner: wi !== undefined ? natWin[i] - natWin[wi] : NaN_,
+      wallNatWin: wi !== undefined ? natWin[wi] : NaN_,
+      innerMinNatWin: inner.length ? minOf(inner.map((k) => natWin[k])) : NaN_,
+      innerMeanNatWin: inner.length ? mean(inner.map((k) => natWin[k])) : NaN_,
+      outerThreat: outer.length ? minOf(outer.map((k) => exSTok[k])) - exSTok[i] : NaN_,
+      outerMaxNatWin: outer.length ? maxOf(outer.map((k) => natWin[k])) : NaN_,
+      c1NatWinGap: c1 !== undefined && c1 !== i ? natWin[c1] - natWin[i] : NaN_,
+      exTimeVsInner: wi !== undefined ? exTime[i] - exTime[wi] : NaN_,
+      c1ExST: c1 !== undefined ? exSTok[c1] : NaN_,
+      c1CourseWin: c1 !== undefined ? pCourse[c1][0] : NaN_,
+      pN90: f(h.n90), pAvgFin: pAvgFin[i], pWin10: f(h.win10), pTop3: f(h.top3_10),
+      pCourseWin: pCourse[i][0], pCourseTop2: pCourse[i][1], pCourseTop3: pCourse[i][2], pCourseN: pCourse[i][3],
+      pVenueWin: f(h.venueWin), pSetsuAvg: f(h.setsuAvg), pSetsuN: h.setsuN || 0, pDaysOff: f(h.daysOff),
+      pSTavg: f(h.stAvg), pSTstd: f(h.stStd), pF180: f(h.f180), stEst: stEst[i], stEstRank: stEstRank[i],
+      stEstVsInner: wi !== undefined ? stEst[i] - stEst[wi] : NaN_,
+      stEstVsOuter: wo !== undefined ? stEst[i] - stEst[wo] : NaN_,
+      mAvgFin: m.avgFin, mWin: m.win, mN: m.n, pAvgFinRank: pAvgFinRank[i], pCourseWinRank: pCourseWinRank[i],
+    };
+    return FEATURES.map((k) => { const v = row[k]; return (v === null || v === undefined || Number.isNaN(v)) ? NaN_ : +v; });
+  });
+  return { boats, X, course };
+}
+
+// ------------------------------------------------------------------ モデル（勾配ブースティング木）
+// 書き出し形式: {base, trees: [[feature[], threshold[], left[], right[], missingLeft(0/1)[], value[]], ...]}
+function evalTree(t, x) {
+  const fe = t[0], th = t[1], le = t[2], ri = t[3], ml = t[4], va = t[5];
+  let i = 0;
+  while (le[i] !== 0) {
+    const v = x[fe[i]];
+    if (v !== v) i = ml[i] ? le[i] : ri[i];
+    else i = v <= th[i] ? le[i] : ri[i];
+  }
+  return va[i];
+}
+export function rawScore(m, x) {
+  let s = m.base;
+  for (const t of m.trees) s += evalTree(t, x);
+  return s;
+}
+const sigmoid = (z) => 1 / (1 + Math.exp(-z));
+
+// 各艇の 1着・2着以内・3着以内 の確率（レース内で合計 1・2・3 になるよう調整）
+export function placeProbs(model, X) {
+  const n = X.length;
+  const p1 = X.map((x) => sigmoid(rawScore(model.win, x)));
+  const p2 = X.map((x) => sigmoid(rawScore(model.top2, x)));
+  const p3 = X.map((x) => sigmoid(rawScore(model.top3, x)));
+  const s1 = p1.reduce((a, b) => a + b, 0);
+  const w = p1.map((v) => v / s1);
+  const t2 = scaleTo(p2, Math.min(2, n));
+  const t3 = scaleTo(p3, Math.min(3, n));
+  for (let i = 0; i < n; i++) { t2[i] = Math.max(t2[i], w[i]); t3[i] = Math.max(t3[i], t2[i]); }
+  return { win: w, top2: t2, top3: t3 };
+}
+function scaleTo(p, total) { // 合計を total に、各値は 1 以下に
+  let q = p.slice();
+  for (let it = 0; it < 20; it++) {
+    const fixed = q.map((v) => v >= 0.999);
+    const sumFixed = q.reduce((a, v, i) => a + (fixed[i] ? 1 : 0), 0);
+    const sumFree = q.reduce((a, v, i) => a + (fixed[i] ? 0 : v), 0);
+    if (sumFree <= 0) break;
+    const k = (total - sumFixed) / sumFree;
+    q = q.map((v, i) => (fixed[i] ? 0.999 : Math.min(0.999, v * k)));
+    if (Math.abs(q.reduce((a, b) => a + b, 0) - total) < 1e-9) break;
+  }
+  return q;
+}
+
+// 1着・2着内・3着内の確率から3連単の確率を作る（2・3着の出方を反復で合わせる）
+export function trifecta(pp, iters = 12) {
+  const n = pp.win.length;
+  const idx = [...Array(n).keys()];
+  if (n < 3) return [];
+  const s2t = idx.map((i) => Math.max(pp.top2[i] - pp.win[i], 1e-4));
+  const s3t = idx.map((i) => Math.max(pp.top3[i] - pp.top2[i], 1e-4));
+  const n2 = s2t.reduce((a, b) => a + b, 0); const n3 = s3t.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < n; i++) { s2t[i] /= n2; s3t[i] /= n3; }
+  const w2 = s2t.slice(); const w3 = s3t.slice();
+  const perms = [];
+  for (const a of idx) for (const b of idx) if (b !== a) for (const c of idx) if (c !== a && c !== b) perms.push([a, b, c]);
+  const build = () => {
+    const sw2 = w2.reduce((x, y) => x + y, 0); const sw3 = w3.reduce((x, y) => x + y, 0);
+    return perms.map(([a, b, c]) => pp.win[a] * w2[b] / (sw2 - w2[a]) * w3[c] / (sw3 - w3[a] - w3[b]));
+  };
+  let tri = build();
+  for (let it = 0; it < iters; it++) {
+    const m2 = new Array(n).fill(0); const m3 = new Array(n).fill(0);
+    perms.forEach(([a, b, c], k) => { m2[b] += tri[k]; m3[c] += tri[k]; });
+    for (let i = 0; i < n; i++) {
+      w2[i] *= Math.pow(s2t[i] / Math.max(m2[i], 1e-9), 0.7);
+      w3[i] *= Math.pow(s3t[i] / Math.max(m3[i], 1e-9), 0.7);
+    }
+    tri = build();
+  }
+  const tot = tri.reduce((a, b) => a + b, 0);
+  return perms.map((p, k) => ({ idx: p, p: tri[k] / tot })).sort((x, y) => y.p - x.p);
+}
+
+// 3連単の確率から 2連単・3連複・2連複 を作る（艇番で表す）
+export function derived(tri, boats) {
+  const ex = {}; const trio = {}; const qu = {};
+  for (const t of tri) {
+    const [a, b, c] = t.idx.map((i) => boats[i].waku);
+    const e = `${a}-${b}`; ex[e] = (ex[e] || 0) + t.p;
+    const s = [a, b, c].sort().join('='); trio[s] = (trio[s] || 0) + t.p;
+    const q = [a, b].sort().join('='); qu[q] = (qu[q] || 0) + t.p;
+  }
+  const sorted = (o) => Object.entries(o).map(([k, p]) => ({ combo: k, p })).sort((x, y) => y.p - x.p);
+  return { exacta: sorted(ex), trio: sorted(trio), quinella: sorted(qu) };
+}
+
+// まとめ: レース → 予想
+export function predictRace(race, model, hist) {
+  const { boats, X, course } = buildFeatures(race, hist, model.vc);
+  if (boats.length < 3) return null;
+  const usePv = race.preview !== 'none';
+  const m = usePv ? model.full : (model.pre || model.full);
+  const pp = placeProbs(m, X);
+  const tri = trifecta(pp).map((t) => ({ combo: t.idx.map((i) => boats[i].waku).join('-'), p: t.p }));
+  const der = derived(trifecta(pp), boats);
+  return { boats, course, X, probs: pp, trifecta: tri, ...der, withPreview: usePv };
+}
