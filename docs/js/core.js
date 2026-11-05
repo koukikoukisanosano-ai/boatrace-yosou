@@ -123,14 +123,18 @@ export class History {
   addRace(race) {
     if (!race.hasResult) return;
     const d = dayNumber(race.date);
+    // 展示タイムのレース内平均との差（選手・モーターの「普段の展示の出方」を覚える）
+    const exs = race.boats.map((b) => b.exTime).filter((v) => Number.isFinite(v) && v > 0);
+    const exMean = exs.length >= 4 ? exs.reduce((a, b) => a + b, 0) / exs.length : NaN_;
     for (const b of race.boats) {
       if (b.placeSrc === '欠' || b.num === null) continue;
+      const relEx = Number.isFinite(b.exTime) && b.exTime > 0 && Number.isFinite(exMean) ? Math.round((b.exTime - exMean) * 1e4) / 1e4 : null;
       const place = b.place !== null ? b.place : 7;
       const course = b.course || b.exCourse || b.waku;
       const st = (b.st !== null && b.st >= 0) ? b.st : (b.st !== null && b.st < 0 ? -1 : null); // -1 = F
       let p = this.p[b.num];
       if (!p) p = this.p[b.num] = { r: [], c: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], v: {} };
-      p.r.push([d, race.jcd, course, place, st]);
+      p.r.push([d, race.jcd, course, place, st, relEx]);
       if (p.r.length > 40) p.r.splice(0, p.r.length - 40);
       if (course >= 1 && course <= 6) {
         const c = p.c[course - 1];
@@ -141,7 +145,7 @@ export class History {
       if (b.motorNo !== null) {
         const key = `${race.jcd}-${b.motorNo}`;
         const m = this.m[key] || (this.m[key] = []);
-        m.push([d, place]);
+        m.push([d, place, relEx]);
         while (m.length && d - m[0][0] > 60) m.shift();
       }
     }
@@ -151,7 +155,7 @@ export class History {
   // その日のレース用の近況（d より前の結果だけを使う）
   racer(num, d, jcd) {
     const p = this.p[num];
-    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null };
+    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null, exRel: NaN_ };
     if (!p) return out;
     const recs = p.r.filter((r) => r[0] < d);
     if (!recs.length) return out;
@@ -178,6 +182,8 @@ export class History {
       out.stStd = Math.sqrt(sts.reduce((a, b) => a + (b - m) * (b - m), 0) / sts.length);
     }
     out.f180 = recs.filter((r) => r[4] === -1 && d - r[0] <= 180).length;
+    const rel = last10.map((r) => r[5]).filter((v) => v !== null && v !== undefined && Number.isFinite(v));
+    if (rel.length >= 3) out.exRel = rel.reduce((a, b) => a + b, 0) / rel.length;
     const v = p.v[jcd] || [0, 0];
     out.venueWin = shrink(v[1], v[0], 1 / 6, 6);
     out.course = p.c;
@@ -186,10 +192,12 @@ export class History {
 
   motor(jcd, motorNo, d) {
     const m = this.m[`${jcd}-${motorNo}`];
-    const out = { avgFin: NaN_, win: NaN_, n: 0 };
+    const out = { avgFin: NaN_, win: NaN_, n: 0, exRel: NaN_ };
     if (!m) return out;
     const recs = m.filter((r) => r[0] < d && d - r[0] <= 45);
     if (!recs.length) return out;
+    const rel = recs.map((r) => r[2]).filter((v) => v !== null && v !== undefined && Number.isFinite(v));
+    if (rel.length >= 3) out.exRel = rel.reduce((a, b) => a + b, 0) / rel.length;
     const fins = recs.map((r) => r[1]);
     out.n = fins.length;
     out.avgFin = (fins.reduce((a, b) => a + b, 0) + 6 * 3.6) / (fins.length + 6);
@@ -213,7 +221,7 @@ export class History {
         }
         if (b.motorNo !== null) {
           const k = `${race.jcd}-${b.motorNo}`;
-          if (!out.m[k]) { const m = this.motor(race.jcd, b.motorNo, d); out.m[k] = [round4(m.avgFin), round4(m.win), m.n]; }
+          if (!out.m[k]) { const m = this.motor(race.jcd, b.motorNo, d); out.m[k] = [round4(m.avgFin), round4(m.win), m.n, round4(m.exRel)]; }
         }
       }
     }
@@ -225,7 +233,7 @@ const round4 = (x) => (Number.isFinite(x) ? Math.round(x * 1e6) / 1e6 : null);
 function compactRacer(x, jcd) {
   const v = {}; v[jcd] = [round4(x.venueWin), x.setsuN, round4(x.setsuAvg)];
   return {
-    a: [round4(x.n90), round4(x.avgFin), round4(x.win10), round4(x.top3_10), round4(x.daysOff), round4(x.stAvg), round4(x.stStd), round4(x.f180)],
+    a: [round4(x.n90), round4(x.avgFin), round4(x.win10), round4(x.top3_10), round4(x.daysOff), round4(x.stAvg), round4(x.stStd), round4(x.f180), round4(x.exRel)],
     c: x.course, v,
   };
 }
@@ -235,10 +243,10 @@ export class Snapshot {
   constructor(snap) { this.s = snap || { r: {}, m: {} }; }
   racer(num, d, jcd) {
     const x = this.s.r[num];
-    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null };
+    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null, exRel: NaN_ };
     if (!x) return out;
     const f = (v) => (v === null || v === undefined ? NaN_ : v);
-    [out.n90, out.avgFin, out.win10, out.top3_10, out.daysOff, out.stAvg, out.stStd, out.f180] = x.a.map(f);
+    [out.n90, out.avgFin, out.win10, out.top3_10, out.daysOff, out.stAvg, out.stStd, out.f180, out.exRel] = [...x.a, null].slice(0, 9).map(f);
     out.course = x.c || null;
     const v = (x.v || {})[jcd];
     if (v) { out.venueWin = f(v[0]); out.setsuN = v[1] || 0; out.setsuAvg = f(v[2]); }
@@ -247,8 +255,8 @@ export class Snapshot {
   }
   motor(jcd, motorNo) {
     const m = this.s.m[`${jcd}-${motorNo}`];
-    if (!m) return { avgFin: NaN_, win: NaN_, n: 0 };
-    return { avgFin: m[0] === null ? NaN_ : m[0], win: m[1] === null ? NaN_ : m[1], n: m[2] || 0 };
+    if (!m) return { avgFin: NaN_, win: NaN_, n: 0, exRel: NaN_ };
+    return { avgFin: m[0] === null ? NaN_ : m[0], win: m[1] === null ? NaN_ : m[1], n: m[2] || 0, exRel: m[3] === null || m[3] === undefined ? NaN_ : m[3] };
   }
 }
 
@@ -273,6 +281,8 @@ export const FEATURES = [
   'pN90', 'pAvgFin', 'pWin10', 'pTop3', 'pCourseWin', 'pCourseTop2', 'pCourseTop3', 'pCourseN', 'pVenueWin',
   'pSetsuAvg', 'pSetsuN', 'pDaysOff', 'pSTavg', 'pSTstd', 'pF180', 'stEst', 'stEstRank', 'stEstVsInner', 'stEstVsOuter',
   'mAvgFin', 'mWin', 'mN', 'pAvgFinRank', 'pCourseWinRank',
+  // 普段の展示の出方（選手・モーターごとの、展示タイムのレース内平均との差の平均）と、今日の展示との差
+  'pExRel', 'mExRel', 'exRelVsOwn', 'exRelVsMotor', 'exRelVsBoth',
 ];
 export const FEATURE_INDEX = Object.fromEntries(FEATURES.map((f, i) => [f, i]));
 
@@ -323,7 +333,7 @@ export function buildFeatures(race, hist, vc) {
   const avgST = boats.map((b) => f(b.avgST));
 
   const hx = boats.map((b, i) => (b.num !== null ? hist.racer(b.num, d, race.jcd) : null));
-  const mx = boats.map((b) => (b.motorNo !== null ? hist.motor(race.jcd, b.motorNo, d) : { avgFin: NaN_, win: NaN_, n: 0 }));
+  const mx = boats.map((b) => (b.motorNo !== null ? hist.motor(race.jcd, b.motorNo, d) : { avgFin: NaN_, win: NaN_, n: 0, exRel: NaN_ }));
   const pCourse = boats.map((b, i) => {
     const h = hx[i]; const c = course[i];
     const prior = COURSE_PRIOR[c] || [1 / 6, 1 / 3, 1 / 2];
@@ -393,6 +403,9 @@ export function buildFeatures(race, hist, vc) {
       stEstVsInner: wi !== undefined ? stEst[i] - stEst[wi] : NaN_,
       stEstVsOuter: wo !== undefined ? stEst[i] - stEst[wo] : NaN_,
       mAvgFin: m.avgFin, mWin: m.win, mN: m.n, pAvgFinRank: pAvgFinRank[i], pCourseWinRank: pCourseWinRank[i],
+      pExRel: f(h.exRel), mExRel: f(m.exRel),
+      exRelVsOwn: exTime[i] - exTimeMean - f(h.exRel), exRelVsMotor: exTime[i] - exTimeMean - f(m.exRel),
+      exRelVsBoth: exTime[i] - exTimeMean - f(h.exRel) - f(m.exRel),
     };
     return FEATURES.map((k) => { const v = row[k]; return (v === null || v === undefined || Number.isNaN(v)) ? NaN_ : +v; });
   });
