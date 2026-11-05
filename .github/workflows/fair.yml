@@ -1,23 +1,41 @@
 name: 公平な検証（月ごとに予想し直す）
 
 on:
+  schedule:
+    - cron: '7 17 1 * *'    # 毎月2日 2:07（日本時間）: 先月までで検証し直す
   workflow_dispatch:
     inputs:
       months:
-        description: '予想し直す月（JSON の配列）'
-        default: '["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10"]'
+        description: '予想し直す月（JSON の配列。空なら2026-01〜先月）'
+        default: ''
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
 
 jobs:
+  months:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.m.outputs.list }}
+    steps:
+      - id: m
+        run: |
+          if [ -n "${{ inputs.months }}" ]; then echo 'list=${{ inputs.months }}' >> "$GITHUB_OUTPUT"; exit 0; fi
+          python3 -c "
+          import datetime, json
+          t = datetime.date.today().replace(day=1); ms = []; d = datetime.date(2026, 1, 1)
+          while d < t:
+              ms.append(d.strftime('%Y-%m')); d = (d.replace(day=28) + datetime.timedelta(days=4)).replace(day=1)
+          print('list=' + json.dumps(ms))" >> "$GITHUB_OUTPUT"
   fit:
+    needs: months
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        month: ${{ fromJSON(inputs.months) }}
+        month: ${{ fromJSON(needs.months.outputs.list) }}
     env:
       TZ: Asia/Tokyo
       PYTHONUTF8: '1'
@@ -40,3 +58,39 @@ jobs:
           name: fair_${{ matrix.month }}
           path: fair_${{ matrix.month }}.pkl
           retention-days: 7
+  eval:
+    needs: fit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          path: fair
+      - name: 学習用の表（払戻）
+        run: node --max-old-space-size=6144 tools/build_dataset.mjs work/full
+      - name: 月ごとに、それより前だけで選んだ買い方で答え合わせ
+        run: python tools/fair_eval.py --preds fair --work work/full | tee fair.log
+      - name: 保存
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data/fair.json
+          git commit -q -m "公平な検証の結果 $(date '+%Y-%m-%d')" || exit 0
+          for i in 1 2 3 4 5 6; do
+            if git pull -q --rebase -X theirs && git push -q; then echo "保存しました"; break; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
