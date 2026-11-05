@@ -1,0 +1,42 @@
+name: 公平な検証（月ごとに予想し直す）
+
+on:
+  workflow_dispatch:
+    inputs:
+      months:
+        description: '予想し直す月（JSON の配列）'
+        default: '["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10"]'
+
+permissions:
+  contents: read
+
+jobs:
+  fit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        month: ${{ fromJSON(inputs.months) }}
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt
+      - name: 学習用の表
+        run: node --max-old-space-size=6144 tools/build_dataset.mjs work/full
+      - name: その月より前だけで学習して、その月を予想
+        run: python tools/fair_fit.py --work work/full --month ${{ matrix.month }} --out fair_${{ matrix.month }}.pkl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fair_${{ matrix.month }}
+          path: fair_${{ matrix.month }}.pkl
+          retention-days: 7
