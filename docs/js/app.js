@@ -10,13 +10,14 @@ const MARKS = ['◎', '○', '▲', '△'];
 const state = {
   date: jstToday(), model: null, snap: null, snapNote: '', races: [], preds: new Map(),
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
-  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null,
-  mode: loadPref('mode', 'exhibit'),
+  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null,
+  mode: loadPref('mode2', 'roi'),
 };
 function loadPref(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
 function savePref(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 保存できなくても動く */ } }
 // 予想の重み: 展示最重視（枠＋展示航走のモデルを強く混ぜる）/ 総合（的中率がいちばん高い混ぜ方）
-const exhibitW = () => (state.mode === 'total' ? 0 : undefined);
+// 予想の重み: 回収率重視（2連単の買い目を選ぶのと同じ予想）/ 展示最重視（枠＋展示航走のモデルを強く混ぜる）
+const exhibitW = () => (state.mode === 'exhibit' ? (state.model && state.model.exhibit_w) || 0.85 : 0);
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -92,7 +93,7 @@ function mergeLive(races, live) {
   if (!live) return;
   for (const r of races) {
     const o = live.odds && live.odds[`${r.jcd}-${r.rno}`];
-    if (o && o.t) r.odds = { t: o.t, at: o.at ? new Date(o.at) : null, site: o.site || '' };
+    if (o && o.t) r.odds = { t: o.t, e: o.e || null, at: o.at ? new Date(o.at) : null, site: o.site || '' };
   }
   if (!live.races) return;
   for (const r of races) {
@@ -121,6 +122,7 @@ async function refresh(full = false) {
     if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
     if (!state.research) { try { state.research = (await getJSON('data/research.json', 'no-cache')).json; } catch (e) { state.research = null; } }
     if (!state.ev) { try { state.ev = (await getJSON('data/research_ev.json', 'no-cache')).json; } catch (e) { state.ev = null; } }
+    if (!state.exa) { try { state.exa = (await getJSON('data/research_exacta.json', 'no-cache')).json; } catch (e) { state.exa = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
     mergeLive(races, live);
     state.races = races;
@@ -144,12 +146,18 @@ async function predictAll() {
   const keep = new Map();
   // 締切の近いレースから計算し、少しずつ画面を止めずに進める
   const order = state.races.slice().sort((a, b) => (a.hasResult - b.hasResult) || (deadline(a) - deadline(b)));
-  let t = performance.now();
+  let t = performance.now(); let shown = t;
   for (const r of order) {
     const key = JSON.stringify([state.mode, r.preview, r.odds ? r.odds.site || String(r.odds.at) : '', r.boats.map((b) => [b.exCourse, b.exST, b.exTime, b.tilt, b.weightAdj, b.propNew, (b.parts || []).length, b.place ?? null]), r.wind, r.wave, r.windDir]);
     if (predKey.get(r.id) === key && state.preds.has(r.id)) { keep.set(r.id, state.preds.get(r.id)); continue; }
     try { const p = predictRace(r, state.model, state.snap, { exhibitW: exhibitW() }); if (p) { keep.set(r.id, p); predKey.set(r.id, key); } } catch (e) { console.error(r.id, e); }
     if (performance.now() - t > 40) {
+      // 計算の途中でも、できた分から表示する（締切の近いレースが先）
+      if (performance.now() - shown > 700 && state.races.length) {
+        state.preds = new Map([...state.preds, ...keep]);
+        if (!state.loading || state.preds.size) render();
+        shown = performance.now();
+      }
       await new Promise((res) => setTimeout(res, 0));
       if (run !== predRun) return false;
       t = performance.now();
@@ -225,7 +233,10 @@ function raceRow(r) {
       hit = `<span class="hitmark ${h.win ? 'yes' : 'no'}">1着${h.win ? '的中' : '外れ'}</span><span class="hitmark ${h.tri5 ? 'yes' : 'no'}">3連単5点${h.tri5 ? '的中' : '外れ'}</span>`;
     }
     const pv = r.preview === 'none' ? '<span class="pv none">展示前</span>' : '<span class="pv full">直前反映</span>';
-    picks = `<span class="picks"><span class="marks">${marks}</span><span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${r.hasResult ? hit : pv}</span>`;
+    const xb = exactaPicks(r, pr);
+    const betTag = xb.state === 'buy' ? `<span class="bet buy">2連単 ${formation(xb.picks.map((p) => p.combo)).join(' ')}</span>`
+      : xb.state === 'pass' ? '<span class="bet pass">2連単 見送り</span>' : '';
+    picks = `<span class="picks"><span class="marks">${marks}</span><span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${betTag}${r.hasResult ? hit : pv}</span>`;
   } else {
     picks = '<span class="picks">予想できません（出走表が不足）</span>';
   }
@@ -313,10 +324,10 @@ function raceDetail(r, pr) {
   }
 
   return `<div class="cond">${cond.map((c) => `<span>${c}</span>`).join('')}<span>${src}</span></div>
-    ${rows}
-    ${pr.exhibit ? `<p class="explain">展示評価＝枠（コース）と展示航走（展示タイム・スタート展示・チルト・部品交換など）だけで見た1着の確率。${state.mode === 'total' ? '今は「総合」なので、この評価は予想に少しだけ混ぜています。' : '「展示最重視」では、この評価を予想に強く混ぜています（枠以外では展示航走がいちばん効く重さ）。'}</p>` : ''}
-    ${tenkaiHtml(pr)}
     ${evHtml(r, pr)}
+    ${rows}
+    ${pr.exhibit ? `<p class="explain">展示評価＝枠（コース）と展示航走（展示タイム・スタート展示・チルト・部品交換など）だけで見た1着の確率。${state.mode === 'exhibit' ? '「展示最重視」なので、上の確率にはこの評価を強く混ぜています（2連単の買い目は回収率重視の予想で選びます）。' : '「展示最重視」に切り替えると、この評価を強く混ぜた確率を表示します。'}</p>` : ''}
+    ${tenkaiHtml(pr)}
     ${recommendHtml(r, pr)}
     <h3>3連単の確率<small>上位5点で ${pct(cum5)}%${pr.withOdds ? '・オッズ反映' : ''}</small></h3>
     <div class="bets">${bets}</div>
@@ -342,47 +353,48 @@ function tenkaiHtml(pr) {
     <p class="explain">展開の確率は展開モデルだけの値（展示評価やオッズを混ぜる前）。「続く並び」はその展開になったときの2・3着の確率です（展開ごとに、1着艇との並び・コースの差・選手の力と展示の差から計算）。</p>`;
 }
 
-// 期待値のある買い目（3連単・2連単）: 予想方法の比較（research_ev.json）で選んだ決め方で、締切前オッズから選ぶ
-const DEFAULT_EV = { t: 1.2, minp: 0.01, maxo: 60, k: 3, alpha: 0.5 };
-function evRule(kind) {
-  const E = state.ev;
-  const w = state.mode === 'total' ? '0' : String((state.model && state.model.exhibit_w) ?? '');
-  const byw = E && E.by_w && (E.by_w[w] || E.by_w[Object.keys(E.by_w).pop()]);
-  const best = byw && byw[kind];
-  if (!best) return { rule: DEFAULT_EV, info: null };
-  return { rule: { ...best.rule, alpha: best.alpha }, info: best };
+// 2連単の買い目（メイン）: 学習で選んだ決め方（model.bet = research_exacta.json の結果）で、締切前の2連単オッズから選ぶ
+//   確率はモデルだけ（オッズは混ぜない）。オッズは値段＝期待値の計算にだけ使う
+const DEFAULT_BET = { t: 1.2, minp: 0.02, maxo: 60, k: 2, edge: 1, alpha: 1 };
+function betRule() {
+  const b = state.model && state.model.bet;
+  return b ? { rule: { ...b.rule, alpha: 1 }, info: b } : { rule: DEFAULT_BET, info: null };
+}
+function exactaPicks(r, pr) {
+  if (!pr || r.preview === 'none' || !pr.base) return { state: 'none' };
+  if (!r.odds || !r.odds.e) return { state: 'wait' };
+  const res = evPicks(pr, r, betRule().rule, 'exacta');
+  if (!res) return { state: 'wait' };
+  return { state: res.picks.length ? 'buy' : 'pass', ...res };
+}
+function ruleText(rule) {
+  return `期待値${rule.t}以上${rule.minp ? `・確率${pct(rule.minp)}%以上` : ''}${rule.edge > 1 ? `・市場の${rule.edge}倍以上の確率` : ''}・${rule.maxo}倍以下・期待値の高い${rule.k}点まで`;
 }
 function evHtml(r, pr) {
   if (r.preview === 'none' || !pr.base) return '';
-  const blocks = [];
-  for (const [kind, name] of [['trifecta', '3連単'], ['exacta', '2連単']]) {
-    const { rule, info } = evRule(kind);
-    const past = info ? `<small>過去の検証（本番テスト期間）: 回収${pct(info.hold.roi)}%・的中${pct(info.hold.hit, 1)}%・${info.hold.bets.toLocaleString()}点</small>` : '';
-    const cond = `期待値${rule.t}以上${rule.minp ? `・確率${pct(rule.minp)}%以上` : ''}・${rule.maxo}倍以下・1レース${rule.k}点まで`;
-    const res = evPicks(pr, r, rule, kind);
-    let body;
-    if (res && res.picks.length) {
-      const combos = res.picks.map((x) => x.combo);
-      const ptot = res.picks.reduce((a, x) => a + x.p, 0);
-      const ret = res.picks.reduce((a, x) => a + x.p * x.odds, 0) / res.picks.length;
-      const paid = (r.payouts[kind] || []).map((x) => x.combo);
-      const hit = r.hasResult ? `<span class="hitmark ${combos.some((c) => paid.includes(c)) ? 'yes' : 'no'}">${combos.some((c) => paid.includes(c)) ? '的中' : '外れ'}</span>` : '';
-      body = `<table class="ev"><tbody>${res.picks.map((x) => `<tr><td>${comboHtml(x.combo)}</td><td>${pct(x.p, 1)}%</td><td>${x.odds.toFixed(1)}倍</td><td class="good">${x.ev.toFixed(2)}</td></tr>`).join('')}</tbody></table>
-        <div class="ev-sum">買い方 <b class="num">${formation(combos).join('　')}</b>（${combos.length}点・各100円で${combos.length * 100}円）　当たる確率 計${pct(ptot)}%・期待値 平均${ret.toFixed(2)} ${hit}</div>`;
-    } else if (res) {
-      const near = res.top.slice(0, 3).map((x) => `${comboHtml(x.combo)} ${x.odds.toFixed(1)}倍 期待値${x.ev.toFixed(2)}`).join('　');
-      body = `<div class="ev-sum">条件に合う買い目なし（見送り）。期待値の高い順: ${near}</div>`;
-    } else if (kind === 'exacta' && r.odds && r.odds.t && !r.odds.e) {
-      body = '<div class="ev-sum">2連単のオッズをまだ取れていません。</div>';
-    } else {
-      // オッズがまだ無いとき: この倍率以上なら期待値が条件を超える、という目安
-      const list = (kind === 'exacta' ? pr.exacta : pr.trifecta).filter((x) => x.p >= (rule.minp || 0)).slice(0, kind === 'exacta' ? 3 : 5);
-      body = `<div class="ev-sum">締切7〜2分前にオッズを取ると選びます。目安: ${list.map((x) => `${comboHtml(x.combo)} <b class="num">${(rule.t / x.p).toFixed(1)}</b>倍以上なら買い`).join('　')}</div>`;
-    }
-    blocks.push(`<div class="rec"><div class="rec-h"><b>${name}</b>${past}</div><div class="explain">${cond}${rule.alpha < 1 ? `（予想${pct(rule.alpha)}%＋オッズ${pct(1 - rule.alpha)}%の確率で計算）` : ''}</div>${body}</div>`);
+  const { rule, info } = betRule();
+  const past = info ? `<small>本番テスト（${esc((info.hold_period || []).join('・'))}）: 回収${pct(info.hold.roi)}%（±${pct(info.hold.se)}）・的中${pct(info.hold.hit, 1)}%・${info.hold.bets.toLocaleString()}点</small>` : '';
+  const x = exactaPicks(r, pr);
+  let body;
+  if (x.state === 'buy') {
+    const combos = x.picks.map((p) => p.combo);
+    const ptot = x.picks.reduce((a, p) => a + p.p, 0);
+    const paid = (r.payouts.exacta || []).map((p) => p.combo);
+    const hitc = combos.find((c) => paid.includes(c));
+    const hit = r.hasResult ? `<span class="hitmark ${hitc ? 'yes' : 'no'}">${hitc ? `的中 ${((r.payouts.exacta || []).find((p) => p.combo === hitc).amount).toLocaleString()}円` : '外れ'}</span>` : '';
+    body = `<table class="ev"><thead><tr><th></th><th>確率</th><th>オッズ</th><th>期待値</th><th>市場比</th></tr></thead><tbody>${x.picks.map((p) => `<tr><td>${comboHtml(p.combo)}</td><td>${pct(p.p, 1)}%</td><td>${p.odds.toFixed(1)}倍</td><td class="good">${p.ev.toFixed(2)}</td><td>${p.edge.toFixed(2)}倍</td></tr>`).join('')}</tbody></table>
+      <div class="ev-sum">買い目 <b class="num">${formation(combos).join('　')}</b>（${combos.length}点・各100円で${combos.length * 100}円）　当たる確率 計${pct(ptot)}% ${hit}</div>`;
+  } else if (x.state === 'pass') {
+    const near = x.top.slice(0, 3).map((p) => `${comboHtml(p.combo)} ${p.odds.toFixed(1)}倍 期待値${p.ev.toFixed(2)}`).join('　');
+    body = `<div class="ev-sum"><b>見送り</b>（条件に合う買い目なし）。期待値の高い順: ${near}</div>`;
+  } else {
+    // オッズがまだ無いとき: この倍率以上なら期待値が条件を超える、という目安
+    const list = pr.exacta.filter((p) => p.p >= (rule.minp || 0)).slice(0, 4);
+    body = `<div class="ev-sum">締切7〜2分前に2連単オッズを取ると選びます。目安: ${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, 1).toFixed(1)}</b>倍以上${rule.maxo < 1e8 && rule.t / p.p > rule.maxo ? '（上限超え）' : ''}`).join('　')}</div>`;
   }
-  return `<h3>期待値のある買い目<small>期待値＝確率×オッズ</small></h3>${blocks.join('')}
-    <p class="explain">期待値が1を超える買い目は「予想が正しければ得」な買い目です。ただし過去の検証でも回収率が安定して100%を超えるわけではありません（下の「方法の比較」参照）。締切直前にオッズが動くので、買う前に最新のオッズで期待値を確かめてください。</p>`;
+  return `<h3>2連単の買い目<small>期待値＝確率×オッズ</small></h3>
+    <div class="rec main-bet"><div class="rec-h"><b>${esc(ruleText(rule))}</b>${past}</div>${body}</div>
+    <p class="explain">確率はオッズを混ぜない、予想だけの値です（オッズは値段として期待値の計算にだけ使います）。市場比＝予想の確率がオッズから見た確率の何倍か。締切直前にオッズは動くので、買う前に最新のオッズで期待値を確かめてください。過去の検証は確定オッズで計算しているため、締切前のオッズで買う実際の成績とはずれます（毎日の記録で確認中）。</p>`;
 }
 
 // おすすめの買い方: 予想方法の比較（research.json）で、開発期間で選び本番テスト期間で確かめた買い方
@@ -489,6 +501,28 @@ function renderRecord() {
 }
 
 // 予想方法の比較（research.json）
+// 2連単（メイン）の比較: research_exacta.json
+function renderExacta() {
+  const E = state.exa;
+  if (!E) return '';
+  const pt = (E.prob_table || []).filter((x) => x.gamma === 1 || x.name.startsWith('市場'));
+  const nameOf = (n) => ({ tenkai: '展開モデル（標準）', tenkai_big: '展開モデル（大きめ）', gbm: '機械学習（1着・2連対・3連対）', clogit: '条件付きロジット', ce: '枠＋展示航走だけ' }[n] || n);
+  const probRows = pt.map((x) => `<tr class="${x.name === E.best.prob ? 'chosen' : ''}"><td class="l">${esc(nameOf(x.name))}${x.name === E.best.prob ? '<br><b>← 採用</b>' : ''}</td><td>${x.dev_ll.toFixed(3)}</td><td>${x.hold_ll.toFixed(3)}</td><td>${pct(x.hold_top1, 1)}</td></tr>`).join('');
+  const b = E.best;
+  const seen = new Set();
+  const top = (E.top || []).filter((c) => { const k = `${c.prob}|${c.gamma}|${c.hold.bets}|${c.hold.roi}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
+  const rows = top.map((c) => `<tr class="${c === E.top[0] ? 'chosen' : ''}"><td class="l">${esc(c.label.replace('2連単 ', ''))}<br><small>${esc(nameOf(c.prob))}${c.gamma !== 1 ? ` γ${c.gamma}` : ''}</small></td><td>${pct(c.dev.roi)}%</td><td>${pct(c.hold.roi)}%<br><small>±${pct(c.hold.se)}</small></td><td>${pct(c.hold.hit, 1)}%</td><td>${(c.hold.bets / Math.max(1, E.hold_days || 120)).toFixed(0)}</td></tr>`).join('');
+  const months = Object.entries(b.hold_months || {}).map(([m, v]) => `${+m.slice(5)}月 ${pct(v)}%`).join('・');
+  return `<h2>2連単（メイン）の買い方の比較（${esc(E.when || '')}）</h2>
+    <p class="explain">確率はオッズを混ぜない予想だけで出し、オッズは期待値の計算にだけ使います。2024年11月〜のデータで学習し、開発期間（${esc((E.dev || []).join('・'))}）で予想の混ぜ方と買い方を${(E.n || 0).toLocaleString()}通りから選び、本番テスト期間（${esc((E.hold || []).join('・'))}）で確かめました。</p>
+    <h3>確率の当たり具合（2連単）</h3>
+    <table class="rec-t"><thead><tr><th class="l">予想</th><th>開発<br>logloss</th><th>本番<br>logloss</th><th>本番<br>1点的中</th></tr></thead><tbody>${probRows}</tbody></table>
+    <p class="explain">logloss は小さいほど良い。確定オッズ（締切後にしか分からない）にはまだ少し届いていません。</p>
+    <h3>買い方</h3>
+    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="explain">採用した買い方の本番テストの月別回収率: ${months}。月によるぶれが大きく（±8%程度の誤差）、確定オッズで計算した成績なので、締切前のオッズで買う実際の成績は毎日の記録で確かめていきます。</p>`;
+}
+
 function renderResearch() {
   const R = state.research;
   if (!R) return '<div class="note">比較の結果はまだありません。</div>';
@@ -499,8 +533,8 @@ function renderResearch() {
   const mk = (R.prob_table || []).find((x) => x.method === 'market');
   const recs = (R.recommend || []).map((x) => `<tr><td class="l">${esc(x.title)}<br><small>${esc(x.label)}</small></td><td>${pct(x.dev.roi)}%</td><td>${pct(x.hold.roi)}%<br><small>±${pct(x.hold.se)}</small></td><td>${pct(x.hold.hit)}%</td><td>${(x.hold.bets / Math.max(1, (R.hold_days || 1))).toFixed(0)}</td></tr>`).join('');
   const types = Object.values(R.best_by_type_top || {}).map((x) => `<tr><td class="l">${esc(x.label)}<br><small>${esc(x.method_label || x.method)}</small></td><td>${pct(x.dev.roi)}%</td><td>${pct(x.hold.roi)}%<br><small>±${pct(x.hold.se)}</small></td><td>${pct(x.hold.hit)}%</td><td>${(x.hold.bets / Math.max(1, (R.hold_days || 1))).toFixed(0)}</td></tr>`).join('');
-  return `<section class="score research">
-    <h2>予想方法の比較（${esc(R.when || '')}）</h2>
+  return `<section class="score research">${renderExacta()}</section><section class="score research">
+    <h2>予想方法の比較（${esc(R.when || '')}・前の方法）</h2>
     <p class="explain">${esc(R.rule || '')}</p>
     <p class="explain">開発期間: ${esc((R.dev || []).join('・'))}／本番テスト期間: ${esc((R.hold || []).join('・'))}。下の数字は本番テスト期間の成績。</p>
     <h3>確率の出し方</h3>
@@ -538,7 +572,7 @@ function render() {
   $('#venues').innerHTML = state.view === 'research' ? '' : [[0, 'すべて'], ...venues].map(([j, v]) => `<button type="button" data-venue="${j}" aria-pressed="${state.venue === j}">${esc(v)}</button>`).join('');
   document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
   document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode)));
-  $('#modeRow').hidden = state.view === 'research' || !(state.model && state.model.tenkai);
+  $('#modeRow').hidden = state.view === 'research' || !(state.model && state.model.ce);
   const list = $('#list');
   if (state.view === 'research') { list.innerHTML = renderResearch(); renderFooter(); return; }
   if (state.error && !state.races.length) { list.innerHTML = `<div class="note bad">${esc(state.error)}</div>`; return; }
@@ -559,16 +593,15 @@ function renderFooter() {
   const ev = m.evaluation || {};
   const lines = [];
   const n = (v.n_train_races || 0) + (v.n_valid_races || 0);
-  lines.push(`予想モデル: ${m.trained_until || '-'} までの約${n ? (n / 10000).toFixed(1) : '-'}万レースで学習。${m.tenkai ? '展開モデル（誰がどの決まり手で勝つか→その展開で2着→3着を、選手の組み合わせから予想）に、枠と展示航走だけのモデルを混ぜています。' : ''}（スタート展示・展示タイム・チルト・部品交換・気象・選手とモーターの近況を使用）`);
-  const evs = (m.evaluation_compare && m.evaluation_compare.tenkai_w0) || null;
-  const one = (e) => `1着の的中 ${pct(e.top1, 1)}%、3連単 本命の的中 ${pct(e.trifecta['1'].hit, 1)}%、上位5点の的中 ${pct(e.trifecta['5'].hit, 1)}%（上位5点を買い続けた回収率 ${pct(e.trifecta['5'].roi)}%）`;
+  lines.push(`予想モデル: ${m.trained_until || '-'} までの約${n ? (n / 10000).toFixed(1) : '-'}万レースで学習。${m.mix ? '展開モデル（誰がどの決まり手で勝つか→その展開で2着→3着を、選手の組み合わせから予想）に、枠と展示航走だけのモデルを少し混ぜています。オッズは混ぜていません。' : ''}（スタート展示・展示タイム・チルト・部品交換・気象・選手とモーターの近況を使用）`);
+  const exh = m.evaluation_compare && (m.evaluation_compare.exhibit || null);
+  const one = (e) => `1着の的中 ${pct(e.top1, 1)}%、2連単 本命の的中 ${pct(e.exacta['1'].hit, 1)}%、3連単 本命の的中 ${pct(e.trifecta['1'].hit, 1)}%・上位5点 ${pct(e.trifecta['5'].hit, 1)}%`;
   if (ev.top1) {
-    lines.push(`学習に使っていないレースでの検証（${ev.period ? `${ev.period[0]}〜${ev.period[1]}` : ''}、${ev.races.toLocaleString()}レース、ページと同じ計算）:`);
-    if (m.tenkai && evs) {
-      lines.push(`展示最重視: ${one(ev)}。`);
-      lines.push(`総合（的中率重視）: ${one(evs)}。展示を最重視すると的中率は下がります。`);
-    } else lines.push(`${one(ev)}。`);
+    lines.push(`学習に使っていないレースでの検証（${ev.period ? `${ev.period[0]}〜${ev.period[1]}` : ''}、${ev.races.toLocaleString()}レース、ページと同じ計算・オッズは混ぜない）:`);
+    lines.push(`${m.mix ? '回収率重視: ' : ''}${one(ev)}。`);
+    if (exh) lines.push(`展示最重視: ${one(exh)}。`);
   }
+  if (m.bet) lines.push(`2連単の買い方: ${esc(m.bet.label)}（本番テスト ${esc((m.bet.hold_period || []).join('・'))} で回収${pct(m.bet.hold.roi)}%±${pct(m.bet.hold.se)}、確定オッズで計算）。`);
   lines.push('データ: Boatrace Open API（非公式・約10分おき更新）と、公式サイトから自動で取った直前情報。予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。');
   $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
 }
@@ -588,7 +621,7 @@ document.addEventListener('click', (e) => {
   if (vb) { state.venue = +vb.dataset.venue; render(); return; }
   const mb = e.target.closest('[data-mode]');
   if (mb) {
-    state.mode = mb.dataset.mode; savePref('mode', state.mode);
+    state.mode = mb.dataset.mode; savePref('mode2', state.mode);
     document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode)));
     predictAll().then((ok) => { if (ok) render(); });
     return;

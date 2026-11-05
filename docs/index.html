@@ -204,6 +204,11 @@ footer p { margin: 6px 0; }
 .sc-bar i { display: block; height: 100%; background: var(--water); }
 .sc-f { font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
 .sc-f .p, .ev-sum .p { font-family: var(--num); font-weight: 600; color: var(--ink); margin-left: 2px; }
+.bet { font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 10px; white-space: nowrap; font-family: var(--num); }
+.bet.buy { color: var(--bg); background: var(--water); }
+.bet.pass { color: var(--muted); border: 1px solid var(--line); }
+div.rec.main-bet { border-color: var(--water); border-width: 1.5px; }
+table.ev th { font-weight: 500; color: var(--muted); font-size: 11px; text-align: left; padding: 0 12px 0 0; }
 table.ev { border-collapse: collapse; margin: 4px 0; font-size: 13.5px; }
 table.ev td { padding: 3px 12px 3px 0; font-family: var(--num); font-variant-numeric: tabular-nums; }
 table.ev td.good { color: var(--ok); font-weight: 700; }
@@ -232,8 +237,8 @@ table.ev td.good { color: var(--ok); font-weight: 700; }
   </div>
   <div class="mode" id="modeRow" role="group" aria-label="予想の重み" hidden>
     <span>予想の重み</span>
-    <button type="button" data-mode="exhibit" aria-pressed="true">展示最重視</button>
-    <button type="button" data-mode="total" aria-pressed="false">総合（的中率重視）</button>
+    <button type="button" data-mode="roi" aria-pressed="true">回収率重視</button>
+    <button type="button" data-mode="exhibit" aria-pressed="false">展示最重視</button>
   </div>
   <div class="venues" id="venues" role="group" aria-label="レース場"></div>
 </header>

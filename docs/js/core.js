@@ -442,8 +442,9 @@ function pairVec(spec, xc, xa, xb, t) {
 }
 
 export function prepareModel(json) {
-  if (json.tenkai) {
-    const T = json.tenkai;
+  for (const key of ['tenkai', 'tenkai_big']) {
+    const T = json[key];
+    if (!T) continue;
     T.S.featureMap = T.S.features.map((n) => FEATURE_INDEX[n]);
     T.N2.spec = compileSpec(T.N2.features);
     T.N3.spec = compileSpec(T.N3.features);
@@ -612,7 +613,7 @@ export function evPicks(pr, race, rule, kind) {
   if (!pr || !pr.base || !race.odds || !race.odds.t) return null;
   const om = kind === 'exacta' ? exactaMap(race.odds.e) : oddsMap(race.odds.t);
   if (!om) return null;
-  const alpha = rule.alpha ?? 0.5;
+  const alpha = rule.alpha ?? 1;
   const boats = pr.boats;
   const tri = alpha < 1 ? (blendOdds(pr.base, boats, oddsMap(race.odds.t), alpha) || pr.base) : pr.base;
   const perms = permsOf(boats.length);
@@ -621,9 +622,17 @@ export function evPicks(pr, race, rule, kind) {
     const key = kind === 'exacta' ? `${boats[a].waku}-${boats[b].waku}` : `${boats[a].waku}-${boats[b].waku}-${boats[c].waku}`;
     P[key] = (P[key] || 0) + tri[k];
   });
-  const all = Object.entries(P).map(([combo, p]) => { const o = om[combo]; return { combo, p, odds: o, ev: o ? p * o : 0 }; })
+  // 確率の補正（γ乗して合計1に）: research_exacta.py と同じ
+  if (rule.gamma && rule.gamma !== 1) {
+    let z = 0; for (const k in P) { P[k] = Math.pow(Math.max(P[k], 1e-15), rule.gamma); z += P[k]; }
+    for (const k in P) P[k] /= z;
+  }
+  // 市場の確率（オッズの逆数を合計1に）: 予想がそれより何倍高いか（edge）
+  let zi = 0; for (const k in om) if (om[k] > 0) zi += 1 / om[k];
+  const all = Object.entries(P).map(([combo, p]) => { const o = om[combo]; return { combo, p, odds: o, ev: o ? p * o : 0, edge: o > 0 && zi > 0 ? p / (1 / o / zi) : 0 }; })
     .filter((x) => x.odds > 0).sort((x, y) => y.ev - x.ev);
-  const picks = all.filter((x) => x.ev >= rule.t && x.p >= (rule.minp || 0) && x.odds <= (rule.maxo || 1e9)).slice(0, rule.k || 3);
+  // 期待値の高い順に k 点の中から、条件に合うものだけ（research_exacta.py と同じ選び方）
+  const picks = all.slice(0, rule.k || 3).filter((x) => x.ev >= rule.t && x.p >= (rule.minp || 0) && x.odds <= (rule.maxo || 1e9) && x.edge >= (rule.edge || 0));
   return { picks, top: all.slice(0, 5), alpha };
 }
 
@@ -688,6 +697,15 @@ export function tenkai(T, X) {
   return { tri: tri.map((v) => v / z), S, p2, p3 };
 }
 
+// いくつかの3連単の確率を重み ws で掛け合わせる（重み付き幾何平均）
+function geoMulti(ps, ws) {
+  const out = ps[0].map((_, k) => { let l = 0; for (let i = 0; i < ps.length; i++) l += ws[i] * Math.log(Math.max(ps[i][k], 1e-15)); return l; });
+  const mx = Math.max(...out);
+  const e = out.map((v) => Math.exp(v - mx));
+  const z = e.reduce((a, b) => a + b, 0);
+  return e.map((v) => v / z);
+}
+
 // 2つの3連単の確率を重み w で掛け合わせる（幾何平均）
 function geoMix(t1, t2, w) {
   const out = t1.map((p, k) => Math.exp((1 - w) * Math.log(Math.max(p, 1e-15)) + w * Math.log(Math.max(t2[k], 1e-15))));
@@ -706,7 +724,27 @@ export function predictRace(race, model, hist, opts = {}) {
   let tri;
   const parts = [];
   let scen = null; let exhibit = null;
-  if (usePv && model.tenkai) {
+  let betTri = null;
+  if (usePv && model.mix) {
+    // 回収率重視: いくつかのモデルを重み付きで掛け合わせる（オッズは混ぜない）。2連単の買い目はこの確率で選ぶ
+    const tks = {};
+    const get = (key) => {
+      if (key === 'tenkai' || key === 'tenkai_big') return (tks[key] = tks[key] || tenkai(model[key], X)).tri;
+      if (key === 'clogit') return plArray(softmax(clogitStrength(model.clogit, X)));
+      return triArray(placeProbs(model[key], X));
+    };
+    const keys = Object.keys(model.mix);
+    const ps = keys.map(get);
+    tri = geoMulti(ps, keys.map((k) => model.mix[k]));
+    betTri = tri;
+    scen = tks.tenkai_big || tks.tenkai || (model.tenkai ? tenkai(model.tenkai, X) : null);
+    if (model.ce) {
+      const pce = placeProbs(model.ce, X);
+      exhibit = pce.win;
+      const ew = opts.exhibitW ?? 0;
+      if (ew) tri = geoMix(tri, triArray(pce), ew);
+    }
+  } else if (usePv && model.tenkai) {
     // 展開モデル（＋必要なら3つの平均）に、枠＋展示航走だけのモデルを重み w で混ぜる
     const tk = tenkai(model.tenkai, X);
     scen = tk;
@@ -737,9 +775,9 @@ export function predictRace(race, model, hist, opts = {}) {
   } else {
     tri = triArray(placeProbs(usePv ? model.full : (model.pre || model.full), X));
   }
-  const base = tri;
+  const base = betTri || tri;
   let withOdds = false;
-  if (usePv && race.odds && race.odds.t && opts.blend !== false) {
+  if (usePv && race.odds && race.odds.t && opts.blend !== false && (model.blend_alpha ?? 0.5) < 1) {
     const b = blendOdds(tri, boats, oddsMap(race.odds.t), model.blend_alpha ?? 0.5);
     if (b) { tri = b; withOdds = true; }
   }

@@ -16,16 +16,8 @@ const model = prepareModel(JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'm
 const report = fs.existsSync(OUT) ? JSON.parse(fs.readFileSync(OUT, 'utf8')) : { days: [] };
 const researchFile = path.join(ROOT, 'docs', 'data', 'research.json');
 const recs = fs.existsSync(researchFile) ? (JSON.parse(fs.readFileSync(researchFile, 'utf8')).recommend || []) : [];
-// 期待値の買い方（research_ev.json で選んだ決め方）: 予想の重みごと
-const evFile = path.join(ROOT, 'docs', 'data', 'research_ev.json');
-const evRes = fs.existsSync(evFile) ? JSON.parse(fs.readFileSync(evFile, 'utf8')) : null;
-const EV_RULES = [];
-if (evRes && evRes.by_w) {
-  for (const [w, b] of Object.entries(evRes.by_w)) {
-    const mode = Number(w) === 0 ? '総合' : '展示最重視';
-    for (const kind of ['trifecta', 'exacta']) if (b[kind]) EV_RULES.push({ w: Number(w), kind, title: `期待値 ${kind === 'trifecta' ? '3連単' : '2連単'}（${mode}）`, rule: { ...b[kind].rule, alpha: b[kind].alpha } });
-  }
-}
+// 2連単の買い方（学習で選んだ決め方: model.bet）。予想はオッズを混ぜない
+const EV_RULES = model.bet ? [{ kind: 'exacta', title: '2連単 期待値の買い目（メイン）', rule: { ...model.bet.rule, alpha: 1 } }] : [];
 const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 
 for (const ymd of dates) {
@@ -63,12 +55,11 @@ for (const ymd of dates) {
     if (pr.withOdds) s.withOdds++;
     // 期待値の買い方の成績（締切前に取ったオッズで選び、払戻で答え合わせ）
     const refundsN = (r.refunds || []).map(Number);
-    const prW = { [model.exhibit_w ?? -1]: pr };
     for (const er of EV_RULES) {
-      const p2 = prW[er.w] || (prW[er.w] = predictRace(r, model, snap, { exhibitW: er.w }));
-      const res = evPicks(p2, r, er.rule, er.kind);
+      const res = evPicks(pr, r, er.rule, er.kind);
       if (!res) continue;
-      const x = s.rec[er.title] || (s.rec[er.title] = { bets: 0, hits: 0, ret: 0 });
+      const x = s.rec[er.title] || (s.rec[er.title] = { bets: 0, hits: 0, ret: 0, races: 0 });
+      x.races++;
       for (const t of res.picks) {
         x.bets++;
         if (t.combo.split('-').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
@@ -77,7 +68,7 @@ for (const ymd of dates) {
       }
     }
     // おすすめの買い方の成績
-    for (const rc of recs) {
+    for (const rc of (model.bet ? [] : recs)) {
       const list = pr[LIST[rc.bet]] || [];
       if (!list.length || list[0].p < (rc.rule.conf || 0)) continue;
       const x = s.rec[rc.title] || (s.rec[rc.title] = { bets: 0, hits: 0, ret: 0 });

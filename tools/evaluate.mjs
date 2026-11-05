@@ -16,7 +16,9 @@ const model = prepareModel(JSON.parse(fs.readFileSync(modelPath, 'utf8')));
 
 const hist = new History();
 const warm = path.join(ROOT, 'data', 'warmup');
-if (fs.existsSync(warm)) {
+// Open API に2025年以前の日があれば、そちらを使う（PC版の下地と重ならないように）
+const hasOldOpenApi = fs.readdirSync(path.join(ROOT, 'data', 'openapi')).some((y) => y < '2026');
+if (fs.existsSync(warm) && !hasOldOpenApi) {
   for (const fn of fs.readdirSync(warm).filter((x) => x.endsWith('.jsonl.gz')).sort()) {
     for (const ln of zlib.gunzipSync(fs.readFileSync(path.join(warm, fn))).toString('utf8').split('\n')) if (ln) hist.addRace(JSON.parse(ln));
   }

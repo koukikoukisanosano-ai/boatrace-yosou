@@ -33,19 +33,15 @@ jobs:
       - run: pip install -r requirements.txt
       - name: 学習用の表
         run: node tools/build_dataset.mjs work/full
-      - name: 各月をその月より前のデータだけで予想し直す
-        run: python tools/research.py --work work/full
-      - name: 採点（確率の方法・買い方の総当たり）
-        run: python tools/research_eval.py --work work/full
-      - name: 展示航走の重さ（展開モデル＋枠と展示のモデルを混ぜる割合ごとの、材料の効き）
-        run: python tools/tenkai_exhibit.py --work work/full
-      - name: 展開モデルで予想し直し、期待値の買い方（3連単・2連単）を比べる
-        run: python tools/research_tenkai.py --work work/full
+      - name: 2連単（メイン）- オッズを混ぜない予想を作り直す（開発期間・本番テスト期間）
+        run: python tools/research_exacta.py fit --work work/full --big
+      - name: 2連単（メイン）- 予想の混ぜ方と買い方を比べる
+        run: python tools/research_exacta.py eval --work work/full
       - name: 保存
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/data/research.json docs/data/research_ev.json
+          git add docs/data/research_exacta.json
           if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
           git commit -q -m "予想方法の比較 $(date '+%Y-%m-%d')"
           for i in 1 2 3 4 5 6; do

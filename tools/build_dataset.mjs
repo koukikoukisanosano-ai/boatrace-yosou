@@ -14,7 +14,9 @@ fs.mkdirSync(OUT, { recursive: true });
 // 1) 近況の下地: PC版で集めた 2025年10〜12月の結果（あれば）
 const hist = new History();
 const warm = path.join(ROOT, 'data', 'warmup');
-if (fs.existsSync(warm)) {
+// Open API に2025年以前の日があれば、そちらを使う（PC版の下地と重ならないように）
+const hasOldOpenApi = fs.readdirSync(path.join(ROOT, 'data', 'openapi')).some((y) => y < '2026');
+if (fs.existsSync(warm) && !hasOldOpenApi) {
   for (const fn of fs.readdirSync(warm).filter((x) => x.endsWith('.jsonl.gz')).sort()) {
     const lines = zlib.gunzipSync(fs.readFileSync(path.join(warm, fn))).toString('utf8').split('\n').filter(Boolean);
     for (const ln of lines) hist.addRace(JSON.parse(ln));
