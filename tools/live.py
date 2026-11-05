@@ -289,6 +289,8 @@ class Live:
             key = f"{x['jcd']}-{x['rno']}"
             now = datetime.now(JST)
             rec = self.store["odds"][key]
+            if rec.get("e") and "e0" not in rec:
+                rec["e0"], rec["at0"] = rec["e"], rec.get("at")   # 1回目（締切7〜2分前）の2連単オッズも残す（オッズの動きを調べる用）
             rec.update({"e": od["e"], "at": now.isoformat(timespec="seconds"), "site": od.get("at"), "final": True})
             if od.get("q") and sum(v is not None for v in od["q"]) >= 8:
                 rec["q"] = od["q"]
