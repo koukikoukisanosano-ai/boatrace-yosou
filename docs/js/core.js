@@ -610,12 +610,12 @@ export function exactaMap(e) {
 // 期待値＝確率×オッズ が rule.t 以上・確率 rule.minp 以上・rule.maxo 倍以下のものを、期待値の高い順に rule.k 点まで
 //   kind: 'trifecta'（3連単のオッズ）/ 'exacta'（2連単のオッズ）
 export function evPicks(pr, race, rule, kind) {
-  if (!pr || !pr.base || !race.odds || !race.odds.t) return null;
+  if (!pr || !pr.base || !race.odds) return null;
   const om = kind === 'exacta' ? exactaMap(race.odds.e) : oddsMap(race.odds.t);
   if (!om) return null;
   const alpha = rule.alpha ?? 1;
   const boats = pr.boats;
-  const tri = alpha < 1 ? (blendOdds(pr.base, boats, oddsMap(race.odds.t), alpha) || pr.base) : pr.base;
+  const tri = alpha < 1 && race.odds.t ? (blendOdds(pr.base, boats, oddsMap(race.odds.t), alpha) || pr.base) : pr.base;
   const perms = permsOf(boats.length);
   const P = {};
   perms.forEach(([a, b, c], k) => {

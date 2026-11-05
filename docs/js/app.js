@@ -93,7 +93,9 @@ function mergeLive(races, live) {
   if (!live) return;
   for (const r of races) {
     const o = live.odds && live.odds[`${r.jcd}-${r.rno}`];
-    if (o && o.t) r.odds = { t: o.t, e: o.e || null, at: o.at ? new Date(o.at) : null, site: o.site || '' };
+    if (o && (o.t || o.e)) r.odds = { t: o.t || null, e: o.e || null, at: o.at ? new Date(o.at) : null, site: o.site || '', final: !!o.final };
+    const f = fastCache.get(`${r.jcd}-${r.rno}`);
+    if (f && (!r.odds || !r.odds.at || f.at > r.odds.at)) r.odds = f;
   }
   if (!live.races) return;
   for (const r of races) {
@@ -308,7 +310,7 @@ function raceDetail(r, pr) {
     const right = o ? `<b>${o.toFixed(1)}</b>倍 期待値<b class="${o * t.p >= 1 ? 'good' : ''}">${(o * t.p).toFixed(2)}</b>` : `目安 <b>${(1 / t.p).toFixed(1)}</b>倍`;
     return `<div class="${hit ? 'hit' : ''}">${comboHtml(t.combo)}</div><div class="p ${hit ? 'hit' : ''}">${pct(t.p, 1)}%</div><div class="o ${hit ? 'hit' : ''}">${right}</div>`;
   }).join('');
-  const oddsAt = om ? `オッズ ${r.odds.site ? esc(r.odds.site) : r.odds.at ? hhmm(r.odds.at) : ''}時点` : '目安＝つり合いの倍率';
+  const oddsAt = om ? `オッズ ${r.odds.site ? esc(r.odds.site) : r.odds.at ? hhmm(r.odds.at) : ''}時点${r.odds.final ? '（締切1分前）' : ''}` : '目安＝つり合いの倍率';
 
   let result = '';
   if (r.hasResult) {
@@ -504,6 +506,17 @@ document.addEventListener('click', (e) => {
     if (r && art) art.outerHTML = raceRow(r);
     return;
   }
+  const body = e.target.closest('.race-body');
+  if (body && !e.target.closest('a, button, input')) {
+    const art = body.closest('.race');
+    const id = art.id.slice(2);
+    state.open.delete(id);
+    const r = state.races.find((x) => x.id === id);
+    if (r) art.outerHTML = raceRow(r);
+    const el = document.getElementById(`r-${id}`);
+    if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: 'start' });
+    return;
+  }
   const vb = e.target.closest('[data-venue]');
   if (vb) { state.venue = +vb.dataset.venue; render(); return; }
   const mb = e.target.closest('[data-mode]');
@@ -523,6 +536,37 @@ $('#next').addEventListener('click', () => {
   state.date = n; state.races = []; state.open.clear(); state.view = n >= jstToday() ? 'upcoming' : 'done'; refresh(true);
 });
 $('#reload').addEventListener('click', () => refresh(false));
+
+// 締切直前のオッズ: 開いているレースが締切3分前〜締切のあいだは、15秒ごとに GitHub から直接読む（公開の反映を待たない）
+const LIVE_API = 'https://api.github.com/repos/koukikoukisanosano-ai/boatrace-yosou/contents/docs/live';
+let fastBusy = false;
+const fastCache = new Map();
+async function fastOdds() {
+  if (fastBusy || document.visibilityState !== 'visible' || state.date !== jstToday()) return;
+  const near = state.races.filter((r) => state.open.has(r.id) && minsLeft(r) <= 3 && minsLeft(r) > -0.5 && !(r.odds && r.odds.final));
+  if (!near.length) return;
+  fastBusy = true;
+  try {
+    const res = await fetch(`${LIVE_API}/${compact(state.date)}.json?ref=main&t=${Date.now()}`, { headers: { Accept: 'application/vnd.github.raw' }, cache: 'no-store' });
+    if (!res.ok) return;
+    const live = await res.json();
+    let changed = false;
+    for (const r of near) {
+      const o = live.odds && live.odds[`${r.jcd}-${r.rno}`];
+      if (!o || !(o.t || o.e)) continue;
+      const at = o.at ? new Date(o.at) : null;
+      if (r.odds && r.odds.at && at && +r.odds.at === +at) continue;
+      r.odds = { t: o.t || null, e: o.e || null, at, site: o.site || '', final: !!o.final };
+      fastCache.set(`${r.jcd}-${r.rno}`, r.odds);
+      changed = true;
+    }
+    if (changed) {
+      await predictAll();
+      for (const r of near) { const art = document.getElementById(`r-${r.id}`); if (art) art.outerHTML = raceRow(r); }
+    }
+  } catch (e) { console.error(e); } finally { fastBusy = false; }
+}
+setInterval(fastOdds, 15000);
 
 setInterval(() => {
   if (document.visibilityState !== 'visible') return;

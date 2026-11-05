@@ -47,7 +47,8 @@ INTERVAL = 1.0          # 公式サイトへのリクエストを始める間隔
 WORKERS = 3             # 同時に取りに行く数
 WINDOW_BEFORE = 20      # 締切の何分前から取りに行くか
 RETRY_SEC = 70          # まだ出ていなかったレースを次に見に行くまでの秒数（締切10分前を切ったら40秒）
-ODDS_FROM, ODDS_TO = 7.0, 2.0   # 締切の何分前のオッズ（3連単）を取るか（この間に1回）
+ODDS_FROM, ODDS_TO = 7.0, 2.0   # 締切の何分前のオッズ（3連単・2連単）を取るか（この間に1回）
+FINAL_FROM, FINAL_TO = 1.5, 0.4  # 締切1分前ごろに2連単オッズをもう一度取る
 
 
 def log(*a):
@@ -171,6 +172,7 @@ class Live:
         p = self.path()
         self.store = json.loads(p.read_text()) if p.exists() else {"date": day, "updated": None, "races": {}}
         self.store.setdefault("odds", {})
+        self.final_tried = {}
         self.tried = {}
         self.odds_tried = {}
 
@@ -255,6 +257,54 @@ class Live:
                 continue
             out.append(x)
         return out
+
+    def final_targets(self, now: datetime) -> list[dict]:
+        """締切1分前ごろで、まだ2回目の2連単オッズを取っていないレース"""
+        out = []
+        for x in self.schedule:
+            key = f"{x['jcd']}-{x['rno']}"
+            mins = (x["deadline"] - now).total_seconds() / 60
+            rec = self.store["odds"].get(key)
+            if not (FINAL_TO <= mins <= FINAL_FROM) or not rec or rec.get("final"):
+                continue
+            if time.time() - self.final_tried.get(key, 0) < 15:
+                continue
+            out.append(x)
+        return out
+
+    def fetch_exacta(self, x: dict):
+        h2 = self.official("odds2tf", x["jcd"], x["rno"])
+        try:
+            return x, (odds_parse.parse("odds2tf", h2) if h2 else None)
+        except Exception as e:  # noqa: BLE001
+            log("2連単オッズの読み取り失敗", e)
+            return x, None
+
+    def capture_final(self, xs: list[dict]):
+        for x in xs:
+            self.final_tried[f"{x['jcd']}-{x['rno']}"] = time.time()
+        for x, od in self.pool.map(self.fetch_exacta, xs):
+            if not od or not od.get("e") or sum(v is not None for v in od["e"]) < 15:
+                continue
+            key = f"{x['jcd']}-{x['rno']}"
+            now = datetime.now(JST)
+            rec = self.store["odds"][key]
+            rec.update({"e": od["e"], "at": now.isoformat(timespec="seconds"), "site": od.get("at"), "final": True})
+            if od.get("q") and sum(v is not None for v in od["q"]) >= 8:
+                rec["q"] = od["q"]
+            self.store["updated"] = now.isoformat(timespec="seconds")
+            self.dirty = True
+            self.stats["odds_final"] = self.stats.get("odds_final", 0) + 1
+            log(f"2連単オッズ（締切前の再取得） {key} 締切{x['deadline']:%H:%M}（あと{(x['deadline'] - now).total_seconds() / 60:.1f}分）")
+
+    def soon(self, now: datetime) -> bool:
+        """締切2分半以内で、まだ再取得していないレースがあるか（あれば短い間隔で回す）"""
+        for x in self.schedule:
+            mins = (x["deadline"] - now).total_seconds() / 60
+            rec = self.store["odds"].get(f"{x['jcd']}-{x['rno']}")
+            if FINAL_TO <= mins <= 2.5 and not (rec and rec.get("final")):
+                return True
+        return False
 
     def fetch_odds(self, x: dict):
         html = self.official("odds3t", x["jcd"], x["rno"])
@@ -369,8 +419,12 @@ class Live:
             if self.schedule and now > self.schedule[-1]["deadline"] + timedelta(minutes=5):
                 log("今日のレースは終わりました")
                 break
-            self.capture_odds(self.odds_targets(now)[:6])   # 締切が近いので先に
-            self.capture_many(self.targets(now)[:12])
+            self.capture_final(self.final_targets(now)[:3])  # 締切1分前の2連単オッズを最優先
+            if self.dirty:
+                self.publish()                                # すぐ届ける
+            busy = self.soon(datetime.now(JST))               # もうすぐ再取得するレースがあるなら、ほかは少しずつ
+            self.capture_odds(self.odds_targets(now)[:3 if busy else 6])
+            self.capture_many(self.targets(now)[:3 if busy else 12])
             self.publish()
             self.deploy()
             if once:
@@ -378,7 +432,7 @@ class Live:
             if time.time() - started > max_minutes * 60:
                 log("時間になったので終了（次の実行に引き継ぎ）")
                 break
-            time.sleep(20)
+            time.sleep(4 if self.soon(datetime.now(JST)) else 20)
         self.publish()
         self.deploy()
         log("集計:", json.dumps(self.stats, ensure_ascii=False))
