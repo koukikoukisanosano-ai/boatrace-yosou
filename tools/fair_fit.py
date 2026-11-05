@@ -19,8 +19,9 @@ from research_exacta import load, log  # noqa: E402
 from tenkai import COURSE, EXHIBIT, clf, pair_feats, pair_rows, race_tensor, scenario_probs, tri_tenkai, winner_class  # noqa: E402
 
 # 名前: (木の本数, 学習率, 葉の数, 新しい日を重く見る半減期[日] or None)
-VARIANTS = {"tenkai": (300, 0.08, 15, None), "tenkai_big": (600, 0.05, 31, None),
-            "tenkai_xl": (1000, 0.03, 31, None), "tenkai_rw": (600, 0.05, 31, 180)}
+VARIANTS = {"tenkai": (300, 0.08, 15, None), "tenkai_big": (600, 0.05, 31, None)}
+# 試して採用しなかったもの（--variants で指定すれば作れる）
+EXTRA = {"tenkai_xl": (1000, 0.03, 31, None), "tenkai_rw": (600, 0.05, 31, 180)}
 
 
 def recency(dates, end, half):
@@ -48,8 +49,8 @@ def main():
     R = len(ids)
     out = {"month": a.month, "ids": ids, "present": present, "place": place}
     import pandas as pd
-    for name, (n, lr, leaves, half) in VARIANTS.items():
-        if a.variants and name not in a.variants.split(","):
+    for name, (n, lr, leaves, half) in {**VARIANTS, **EXTRA}.items():
+        if (a.variants and name not in a.variants.split(",")) or (not a.variants and name in EXTRA):
             continue
         mk = lambda: clf(n, lr, leaves)  # noqa: E731
         w = (lambda d: recency(d, f"{a.month}-01", half)) if half else (lambda d: None)
