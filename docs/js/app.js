@@ -11,7 +11,7 @@ const MARKS = ['◎', '○', '▲', '△'];
 const state = {
   date: jstToday(), model: null, snap: null, snapNote: '', races: [], preds: new Map(),
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
-  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null,
+  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null, fair: null,
   mode: loadPref('mode2', 'roi'),
   bank: +loadPref('bank2', '500000') || 500000,
 };
@@ -130,6 +130,7 @@ async function refresh(full = false) {
     await loadModel();
     if (full || !state.snap) { await loadSnapshot(state.date); predKey.clear(); }
     if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
+    if (!state.fair) { try { state.fair = (await getJSON('data/fair.json', 'no-cache')).json; } catch (e) { state.fair = null; } }
     if (!state.exa) { try { state.exa = (await getJSON('data/research_exacta.json', 'no-cache')).json; } catch (e) { state.exa = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
     mergeLive(races, live);
@@ -370,7 +371,8 @@ function ruleText(rule) {
 function evHtml(r, pr) {
   if (r.preview === 'none' || !pr.base) return '';
   const { rule, info } = betRule();
-  const past = info ? `<small>検証 回収${pct(info.hold.roi)}%・的中${pct(info.hold.hit, 1)}%</small>` : '';
+  const F = state.fair && state.fair.total;
+  const past = F ? `<small>公平な検証 回収${pct(F.roi)}%（±${pct(F.se)}）</small>` : info ? `<small>検証 回収${pct(info.hold.roi)}%</small>` : '';
   const x = exactaPicks(r, pr);
   let body;
   if (x.state === 'buy') {
@@ -524,7 +526,14 @@ function renderResearch() {
   const top = (E.top || []).filter((c) => { const k = `${c.prob}|${c.gamma}|${c.hold.bets}|${c.hold.roi}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
   const rows = top.map((c) => `<tr class="${c === E.top[0] ? 'chosen' : ''}"><td class="l">${esc(c.label.replace('2連単 ', ''))}<br><small>${esc(nameOf(c.prob))}${c.gamma !== 1 ? ` γ${c.gamma}` : ''}</small></td><td>${pct(c.dev.roi)}%</td><td>${pct(c.hold.roi)}%<br><small>±${pct(c.hold.se)}</small></td><td>${pct(c.hold.hit, 1)}%</td><td>${(c.hold.bets / Math.max(1, E.hold_days || 120)).toFixed(0)}</td></tr>`).join('');
   const months = Object.entries(E.best.hold_months || {}).map(([m, v]) => `${+m.slice(5)}月 ${pct(v)}%`).join('・');
-  return `<section class="score research"><h2>2連単の買い方の比較（${esc(E.when || '')}）</h2>
+  const FA = state.fair;
+  const fairHtml = FA ? `<section class="score research"><h2>公平な検証（${FA.months.length}か月・${FA.total.bets.toLocaleString()}点）</h2>
+    <p class="explain">月ごとに、その月より前のデータだけで学習し、買い方もその月より前の成績だけで選んで、その月を答え合わせ（確定オッズ）。</p>
+    <div class="grid"><div><div class="k">回収率</div><div class="v">${pct(FA.total.roi)}<small>%</small></div><div class="k">±${pct(FA.total.se)}</div></div>
+    <div><div class="k">95%の範囲</div><div class="v">${pct(FA.total.ci95[0])}〜${pct(FA.total.ci95[1])}<small>%</small></div></div>
+    <div><div class="k">100%を下回る確率</div><div class="v">${pct(FA.total.p_below_100)}<small>%</small></div></div></div>
+    <table class="rec-t"><thead><tr><th class="l">月</th><th>点数</th><th>回収</th></tr></thead><tbody>${FA.months.map((x) => `<tr><td class="l">${+x.month.slice(5)}月<br><small>${esc(x.chosen.label)}</small></td><td>${x.test.bets}</td><td>${x.test.roi === null ? '-' : pct(x.test.roi) + '%'}</td></tr>`).join('')}</tbody></table></section>` : '';
+  return `${fairHtml}<section class="score research"><h2>2連単の買い方の比較（${esc(E.when || '')}）</h2>
     <p class="explain">開発 ${esc((E.dev || []).join('・'))} で選び、本番 ${esc((E.hold || []).join('・'))} で確認（確定オッズ）。</p>
     <h3>確率の当たり具合</h3>
     <table class="rec-t"><thead><tr><th class="l">予想</th><th>開発<br>logloss</th><th>本番<br>logloss</th><th>本番<br>本命的中</th></tr></thead><tbody>${probRows}</tbody></table>
@@ -558,7 +567,8 @@ function renderFooter() {
   const m = state.model;
   if (!m) return;
   const lines = [];
-  lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。${m.bet ? `2連単の買い方: ${esc(ruleText(m.bet.rule))}（検証 回収${pct(m.bet.hold.roi)}%）` : ''}`);
+  const F = state.fair && state.fair.total;
+  lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。${m.bet ? `2連単の買い方: ${esc(ruleText(m.bet.rule))}` : ''}${F ? `（公平な検証 回収${pct(F.roi)}%、95%の範囲 ${pct(F.ci95[0])}〜${pct(F.ci95[1])}%）` : ''}`);
   lines.push('予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。');
   $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
 }
