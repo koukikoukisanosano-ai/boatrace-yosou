@@ -50,7 +50,8 @@ INTERVAL = 1.0          # 公式サイトへのリクエストを始める間隔
 WORKERS = 3             # 同時に取りに行く数
 WINDOW_BEFORE = 20      # 締切の何分前から取りに行くか
 RETRY_SEC = 70          # まだ出ていなかったレースを次に見に行くまでの秒数（締切10分前を切ったら40秒）
-ODDS_FROM, ODDS_TO = 7.0, 2.0   # 締切の何分前のオッズ（3連単・2連単）を取るか（この間に1回）
+LEAD = float(NOTIFY.get("lead_min", 5))   # 締切の何分前に買い目を決めて通知するか（投票が間に合うように）
+ODDS_FROM, ODDS_TO = LEAD + 1.0, max(LEAD - 1.5, 1.6)   # この間に1回、2連単・3連単オッズを取って買い目を決める
 FINAL_FROM, FINAL_TO = 1.5, 0.4  # 締切1分前ごろに2連単オッズをもう一度取る
 
 
@@ -254,7 +255,7 @@ class Live:
         return out
 
     def odds_targets(self, now: datetime) -> list[dict]:
-        """締切7〜2分前で、まだオッズを取っていないレース"""
+        """締切の約5分前（ODDS_FROM〜ODDS_TO）で、まだオッズを取っていないレース"""
         out = []
         for x in self.schedule:
             key = f"{x['jcd']}-{x['rno']}"
@@ -298,7 +299,7 @@ class Live:
             now = datetime.now(JST)
             rec = self.store["odds"][key]
             if rec.get("e") and "e0" not in rec:
-                rec["e0"], rec["at0"] = rec["e"], rec.get("at")   # 1回目（締切7〜2分前）の2連単オッズも残す（オッズの動きを調べる用）
+                rec["e0"], rec["at0"] = rec["e"], rec.get("at")   # 1回目（買い目を決めたとき）の2連単オッズも残す（オッズの動きを調べる用）
             rec.update({"e": od["e"], "at": now.isoformat(timespec="seconds"), "site": od.get("at"), "final": True})
             if od.get("q") and sum(v is not None for v in od["q"]) >= 8:
                 rec["q"] = od["q"]
@@ -317,7 +318,7 @@ class Live:
         return False
 
     def notify_targets(self, now: datetime) -> list[str]:
-        """買い目を決めて知らせるレース: 締切1分前のオッズを取った、または取れないまま締切20秒前になった"""
+        """買い目を決めて知らせるレース: 締切の約5分前に2連単オッズを取れたら、すぐ（締切まで時間があるうちに）"""
         out = []
         for x in self.schedule:
             key = f"{x['jcd']}-{x['rno']}"
@@ -325,9 +326,15 @@ class Live:
                 continue
             rec = self.store["odds"].get(key) or {}
             mins = (x["deadline"] - now).total_seconds() / 60
-            if rec.get("e") and (rec.get("final") or 0 < mins <= 0.35):
+            if rec.get("e") and mins > 0.3:
                 out.append(key)
         return out
+
+    def deadline_of(self, key: str):
+        for x in self.schedule:
+            if f"{x['jcd']}-{x['rno']}" == key:
+                return x["deadline"]
+        return None
 
     def notify(self, keys: list[str]):
         """ページと同じ計算（tools/pick.mjs）で買い目を決め、買いなら通知（ntfy）する"""
@@ -350,9 +357,11 @@ class Live:
                 continue
             stake = max(100, int(NOTIFY.get("bank", 500000) / 200 / 100) * 100)
             combos = " ".join(p["combo"] for p in o["picks"])
+            dl = self.deadline_of(key)
+            left = f"\n締切まで約{max(1, int((dl - now).total_seconds() // 60))}分" if dl else ""
             detail = " / ".join(f"{p['combo']} {p['odds']:.1f}倍・確率{p['p'] * 100:.1f}%・期待値{p['ev']:.2f}" for p in o["picks"])
             msg = {"topic": NOTIFY["topic"], "title": f"買い 2連単 {combos}｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
-                   "message": f"{detail}\n{stake:,}円（入金{NOTIFY.get('bank', 500000) // 10000}万円の1/200）{'' if final else '\n※締切1分前のオッズが取れず、早めのオッズで判定'}",
+                   "message": f"{detail}\n{stake:,}円（入金{NOTIFY.get('bank', 500000) // 10000}万円の1/200）{left}",
                    "tags": ["moneybag"], "priority": 4, "click": NOTIFY.get("page", "")}
             try:
                 res = self.s.post("https://ntfy.sh/", data=json.dumps(msg, ensure_ascii=False).encode("utf-8"), timeout=15)

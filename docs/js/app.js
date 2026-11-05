@@ -104,6 +104,8 @@ function mergeLive(races, live) {
     if (o && (o.t || o.e)) r.odds = { t: o.t || null, e: o.e || null, at: o.at ? new Date(o.at) : null, site: o.site || '', final: !!o.final };
     const f = fastCache.get(`${r.jcd}-${r.rno}`);
     if (f && (!r.odds || !r.odds.at || f.at > r.odds.at)) r.odds = f;
+    const bp = (live.picks && live.picks[`${r.jcd}-${r.rno}`]) || botCache.get(`${r.jcd}-${r.rno}`);
+    if (bp) r.botPick = bp;
   }
   if (!live.races) return;
   for (const r of races) {
@@ -360,6 +362,8 @@ function betRule() {
   return b ? { rule: { ...b.rule, alpha: 1 }, info: b } : { rule: DEFAULT_BET, info: null };
 }
 function exactaPicks(r, pr) {
+  // 締切約5分前に自動で決めた買い目（通知したもの）があれば、それに従う
+  if (r.botPick && (r.botPick.state === 'buy' || r.botPick.state === 'pass')) return { state: r.botPick.state, picks: r.botPick.picks || [], top: [], bot: true };
   if (!pr || r.preview === 'none' || !pr.base) return { state: 'none' };
   if (!r.odds || !r.odds.e) return { state: 'wait' };
   const res = evPicks(pr, r, betRule().rule, 'exacta');
@@ -387,7 +391,7 @@ function evHtml(r, pr) {
     const list = pr.exacta.filter((p) => p.p >= (rule.minp || 0)).slice(0, 3);
     body = `<div class="ev-sum">オッズ待ち　${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, (rule.mino || 0) + 0.1, 1).toFixed(1)}</b>倍以上で買い`).join('　')}</div>`;
   }
-  return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>`;
+  return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目${x.bot ? '（約5分前に決定・通知）' : ''}</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>`;
 }
 
 // 根拠: 特徴量の値から、目立つ点を文章にする
@@ -540,12 +544,12 @@ function renderResearch() {
   const driftHtml = DR && DR.days ? `<section class="score research"><h2>締切前オッズの検証（${DR.days}日・${DR.races.toLocaleString()}レース）</h2>
     <table class="rec-t"><tbody>
       <tr><td class="l">確定 ÷ 締切1分前</td><td>${mv(DR.move && DR.move.t1_to_final)}</td></tr>
-      <tr><td class="l">確定 ÷ 締切7〜2分前</td><td>${mv(DR.move && DR.move.early_to_final)}</td></tr>
-      <tr><td class="l">今の買い方 締切7〜2分前のオッズで選ぶ</td><td>${cr(DR.current && DR.current.early)}</td></tr>
+      <tr><td class="l">確定 ÷ 約5分前</td><td>${mv(DR.move && DR.move.early_to_final)}</td></tr>
+      <tr><td class="l">今の買い方 約5分前のオッズで選ぶ（通知と同じ）</td><td>${cr(DR.current && DR.current.early)}</td></tr>
       <tr><td class="l">今の買い方 締切1分前のオッズで選ぶ</td><td>${cr(DR.current && DR.current.t1)}</td></tr>
       <tr><td class="l">今の買い方 確定オッズで選ぶ（検証と同じ）</td><td>${cr(DR.current && DR.current.final)}</td></tr>
     </tbody></table>
-    <p class="explain">${DR.adopt ? '十分たまったので、学習し直しのときに締切1分前のオッズで選んだ買い方を使います。' : `30日たまったら、締切1分前のオッズで買い方を選び直します（今${DR.days}日）。`}</p></section>` : '';
+    <p class="explain">${DR.adopt ? '十分たまったので、学習し直しのときに約5分前のオッズで選んだ買い方を使います。' : `30日たまったら、約5分前のオッズで買い方を選び直します（今${DR.days}日）。`}</p></section>` : '';
   return `${driftHtml}${fairHtml}<section class="score research"><h2>2連単の買い方の比較（${esc(E.when || '')}）</h2>
     <p class="explain">開発 ${esc((E.dev || []).join('・'))} で選び、本番 ${esc((E.hold || []).join('・'))} で確認（確定オッズ）。</p>
     <h3>確率の当たり具合</h3>
@@ -627,12 +631,12 @@ $('#next').addEventListener('click', () => {
   state.date = n; state.races = []; state.open.clear(); state.view = n >= jstToday() ? 'upcoming' : 'done'; refresh(true);
 });
 $('#reload').addEventListener('click', () => refresh(false));
-// 通知（ntfy）: 買い目が決まったら（締切1分前）スマホに知らせる
+// 通知（ntfy）: 買い目が決まったら（締切約5分前）スマホに知らせる
 let notifyCfg = null;
 async function renderNotify() {
   if (!notifyCfg) { try { notifyCfg = (await getJSON('notify.json', 'no-cache')).json; } catch (e) { return; } }
   const el = $('#notifyPanel');
-  el.innerHTML = `<p>締切1分前に買い目が決まると、スマホに通知します（ページを開いていなくても届きます）。</p>
+  el.innerHTML = `<p>締切の約5分前に買い目が決まると、スマホに通知します（ページを開いていなくても届きます）。</p>
     <ol><li>App Store で「ntfy」アプリを入れる（無料）</li>
     <li>アプリの「＋」で、トピック名に <b class="num">${esc(notifyCfg.topic)}</b> を入れて登録</li></ol>
     <p><a href="https://ntfy.sh/${encodeURIComponent(notifyCfg.topic)}" target="_blank" rel="noopener">ブラウザで通知の一覧を見る</a>　通知の金額は入金${Math.round(notifyCfg.bank / 10000)}万円で計算しています。</p>`;
@@ -649,6 +653,7 @@ $('#notifyBtn').addEventListener('click', () => { const el = $('#notifyPanel'); 
 const LIVE_API = 'https://api.github.com/repos/koukikoukisanosano-ai/boatrace-yosou/contents/docs/live';
 let fastBusy = false;
 let fastPauseUntil = 0;
+const botCache = new Map();
 const fastCache = new Map();
 async function fastOdds() {
   if (fastBusy || document.visibilityState !== 'visible' || state.date !== jstToday()) return;
@@ -656,7 +661,7 @@ async function fastOdds() {
   if (Date.now() < fastPauseUntil) return;
   const shown = state.view === 'upcoming' ? new Set(filtered().map((r) => r.id)) : new Set();
   const near = state.races.filter((r) => !(r.odds && r.odds.final) && minsLeft(r) > -0.5
-    && ((state.open.has(r.id) && minsLeft(r) <= 3) || (shown.has(r.id) && minsLeft(r) <= 1.6)));
+    && ((state.open.has(r.id) && minsLeft(r) <= 6) || (shown.has(r.id) && minsLeft(r) <= 6 && minsLeft(r) >= 4.5 && !r.botPick)));
   if (!near.length) return;
   fastBusy = true;
   try {
@@ -673,6 +678,10 @@ async function fastOdds() {
       r.odds = { t: o.t || null, e: o.e || null, at, site: o.site || '', final: !!o.final };
       fastCache.set(`${r.jcd}-${r.rno}`, r.odds);
       changed = true;
+    }
+    for (const r of near) {
+      const bp = live.picks && live.picks[`${r.jcd}-${r.rno}`];
+      if (bp && !r.botPick) { r.botPick = bp; botCache.set(`${r.jcd}-${r.rno}`, bp); changed = true; }
     }
     if (changed) {
       await predictAll();
