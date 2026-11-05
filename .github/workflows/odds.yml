@@ -31,18 +31,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install requests
+      - run: pip install requests numpy
       - name: 取得
         run: |
           ARGS=""
           if [ -n "${{ inputs.start }}" ]; then ARGS="$ARGS --from ${{ inputs.start }}"; fi
           if [ -n "${{ inputs.end }}" ]; then ARGS="$ARGS --to ${{ inputs.end }}"; fi
           python tools/fetch_odds.py $ARGS
+      - name: 締切前オッズの動きと、締切前オッズで選んだ成績（毎日たまるデータで検証）
+        run: python tools/odds_drift.py || echo "検証は失敗（続けます）"
       - name: 保存
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A data/odds
+          git add -A data/odds docs/data/drift.json
           if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
           git commit -q -m "過去オッズ $(date '+%Y-%m-%d %H:%M')"
           for i in 1 2 3 4 5 6; do

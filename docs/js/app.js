@@ -11,7 +11,7 @@ const MARKS = ['◎', '○', '▲', '△'];
 const state = {
   date: jstToday(), model: null, snap: null, snapNote: '', races: [], preds: new Map(),
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
-  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null, fair: null,
+  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null, fair: null, drift: null,
   mode: loadPref('mode2', 'roi'),
   bank: +loadPref('bank2', '500000') || 500000,
 };
@@ -130,6 +130,7 @@ async function refresh(full = false) {
     await loadModel();
     if (full || !state.snap) { await loadSnapshot(state.date); predKey.clear(); }
     if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
+    if (!state.drift) { try { state.drift = (await getJSON('data/drift.json', 'no-cache')).json; } catch (e) { state.drift = null; } }
     if (!state.fair) { try { state.fair = (await getJSON('data/fair.json', 'no-cache')).json; } catch (e) { state.fair = null; } }
     if (!state.exa) { try { state.exa = (await getJSON('data/research_exacta.json', 'no-cache')).json; } catch (e) { state.exa = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
@@ -533,7 +534,19 @@ function renderResearch() {
     <div><div class="k">95%の範囲</div><div class="v">${pct(FA.total.ci95[0])}〜${pct(FA.total.ci95[1])}<small>%</small></div></div>
     <div><div class="k">100%を下回る確率</div><div class="v">${pct(FA.total.p_below_100)}<small>%</small></div></div></div>
     <table class="rec-t"><thead><tr><th class="l">月</th><th>点数</th><th>回収</th></tr></thead><tbody>${FA.months.map((x) => `<tr><td class="l">${+x.month.slice(5)}月<br><small>${esc(x.chosen.label)}</small></td><td>${x.test.bets}</td><td>${x.test.roi === null ? '-' : pct(x.test.roi) + '%'}</td></tr>`).join('')}</tbody></table></section>` : '';
-  return `${fairHtml}<section class="score research"><h2>2連単の買い方の比較（${esc(E.when || '')}）</h2>
+  const DR = state.drift;
+  const mv = (m) => (m ? `中央値 ${m.median.toFixed(2)}倍・ふつうの動き ${pct(Math.exp(m.abs_log_median) - 1)}%` : '-');
+  const cr = (c) => (c && c.bets ? `${pct(c.roi)}%（${c.bets}点）` : '-');
+  const driftHtml = DR && DR.days ? `<section class="score research"><h2>締切前オッズの検証（${DR.days}日・${DR.races.toLocaleString()}レース）</h2>
+    <table class="rec-t"><tbody>
+      <tr><td class="l">確定 ÷ 締切1分前</td><td>${mv(DR.move && DR.move.t1_to_final)}</td></tr>
+      <tr><td class="l">確定 ÷ 締切7〜2分前</td><td>${mv(DR.move && DR.move.early_to_final)}</td></tr>
+      <tr><td class="l">今の買い方 締切7〜2分前のオッズで選ぶ</td><td>${cr(DR.current && DR.current.early)}</td></tr>
+      <tr><td class="l">今の買い方 締切1分前のオッズで選ぶ</td><td>${cr(DR.current && DR.current.t1)}</td></tr>
+      <tr><td class="l">今の買い方 確定オッズで選ぶ（検証と同じ）</td><td>${cr(DR.current && DR.current.final)}</td></tr>
+    </tbody></table>
+    <p class="explain">${DR.adopt ? '十分たまったので、学習し直しのときに締切1分前のオッズで選んだ買い方を使います。' : `30日たまったら、締切1分前のオッズで買い方を選び直します（今${DR.days}日）。`}</p></section>` : '';
+  return `${driftHtml}${fairHtml}<section class="score research"><h2>2連単の買い方の比較（${esc(E.when || '')}）</h2>
     <p class="explain">開発 ${esc((E.dev || []).join('・'))} で選び、本番 ${esc((E.hold || []).join('・'))} で確認（確定オッズ）。</p>
     <h3>確率の当たり具合</h3>
     <table class="rec-t"><thead><tr><th class="l">予想</th><th>開発<br>logloss</th><th>本番<br>logloss</th><th>本番<br>本命的中</th></tr></thead><tbody>${probRows}</tbody></table>
@@ -614,24 +627,41 @@ $('#next').addEventListener('click', () => {
   state.date = n; state.races = []; state.open.clear(); state.view = n >= jstToday() ? 'upcoming' : 'done'; refresh(true);
 });
 $('#reload').addEventListener('click', () => refresh(false));
+// 通知（ntfy）: 買い目が決まったら（締切1分前）スマホに知らせる
+let notifyCfg = null;
+async function renderNotify() {
+  if (!notifyCfg) { try { notifyCfg = (await getJSON('notify.json', 'no-cache')).json; } catch (e) { return; } }
+  const el = $('#notifyPanel');
+  el.innerHTML = `<p>締切1分前に買い目が決まると、スマホに通知します（ページを開いていなくても届きます）。</p>
+    <ol><li>App Store で「ntfy」アプリを入れる（無料）</li>
+    <li>アプリの「＋」で、トピック名に <b class="num">${esc(notifyCfg.topic)}</b> を入れて登録</li></ol>
+    <p><a href="https://ntfy.sh/${encodeURIComponent(notifyCfg.topic)}" target="_blank" rel="noopener">ブラウザで通知の一覧を見る</a>　通知の金額は入金${Math.round(notifyCfg.bank / 10000)}万円で計算しています。</p>`;
+}
 function renderBank() { $('#bank').value = state.bank; $('#stake').textContent = yen(stake()); }
 $('#bank').addEventListener('change', (e) => {
   const v = Math.max(0, Math.round(+e.target.value || 0));
   state.bank = v || 500000; savePref('bank2', String(state.bank)); renderBank(); render();
 });
 renderBank();
+$('#notifyBtn').addEventListener('click', () => { const el = $('#notifyPanel'); el.hidden = !el.hidden; if (!el.hidden) renderNotify(); });
 
 // 締切直前のオッズ: 開いているレースが締切3分前〜締切のあいだは、15秒ごとに GitHub から直接読む（公開の反映を待たない）
 const LIVE_API = 'https://api.github.com/repos/koukikoukisanosano-ai/boatrace-yosou/contents/docs/live';
 let fastBusy = false;
+let fastPauseUntil = 0;
 const fastCache = new Map();
 async function fastOdds() {
   if (fastBusy || document.visibilityState !== 'visible' || state.date !== jstToday()) return;
-  const near = state.races.filter((r) => state.open.has(r.id) && minsLeft(r) <= 3 && minsLeft(r) > -0.5 && !(r.odds && r.odds.final));
+  // 開いているレース（締切3分前から）と、一覧に出ている締切直前のレース（締切1分半前から）
+  if (Date.now() < fastPauseUntil) return;
+  const shown = state.view === 'upcoming' ? new Set(filtered().map((r) => r.id)) : new Set();
+  const near = state.races.filter((r) => !(r.odds && r.odds.final) && minsLeft(r) > -0.5
+    && ((state.open.has(r.id) && minsLeft(r) <= 3) || (shown.has(r.id) && minsLeft(r) <= 1.6)));
   if (!near.length) return;
   fastBusy = true;
   try {
     const res = await fetch(`${LIVE_API}/${compact(state.date)}.json?ref=main&t=${Date.now()}`, { headers: { Accept: 'application/vnd.github.raw' }, cache: 'no-store' });
+    if (res.status === 403 || res.status === 429) { fastPauseUntil = Date.now() + 10 * 60000; return; }   // 読み込み回数の上限: 10分休む
     if (!res.ok) return;
     const live = await res.json();
     let changed = false;
@@ -650,7 +680,7 @@ async function fastOdds() {
     }
   } catch (e) { console.error(e); } finally { fastBusy = false; }
 }
-setInterval(fastOdds, 15000);
+setInterval(fastOdds, 20000);
 
 setInterval(() => {
   if (document.visibilityState !== 'visible') return;

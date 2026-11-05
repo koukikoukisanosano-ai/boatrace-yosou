@@ -31,6 +31,9 @@ from bs4 import BeautifulSoup
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import odds_parse  # noqa: E402
 
+NOTIFY = json.loads((Path(__file__).resolve().parent.parent / "docs" / "notify.json").read_text()) if (Path(__file__).resolve().parent.parent / "docs" / "notify.json").exists() else {}
+DAY_JSON = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "openapi_today.json"
+
 try:
     from bs4 import XMLParsedAsHTMLWarning
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -172,6 +175,7 @@ class Live:
         p = self.path()
         self.store = json.loads(p.read_text()) if p.exists() else {"date": day, "updated": None, "races": {}}
         self.store.setdefault("odds", {})
+        self.store.setdefault("picks", {})
         self.final_tried = {}
         self.tried = {}
         self.odds_tried = {}
@@ -216,6 +220,10 @@ class Live:
             log("公開データの取得に失敗:", e)
             self.sched_at = time.time() - 420  # 3分後にもう一度
             return
+        try:
+            DAY_JSON.write_text(json.dumps(j, ensure_ascii=False))
+        except Exception as e:  # noqa: BLE001
+            log("今日の出走表の保存に失敗:", e)
         sched = []
         for jcd, st in (j.get("programs", {}).get("stadiums") or {}).items():
             for rno, rc in (st.get("races") or {}).items():
@@ -307,6 +315,51 @@ class Live:
             if FINAL_TO <= mins <= 2.5 and not (rec and rec.get("final")):
                 return True
         return False
+
+    def notify_targets(self, now: datetime) -> list[str]:
+        """買い目を決めて知らせるレース: 締切1分前のオッズを取った、または取れないまま締切20秒前になった"""
+        out = []
+        for x in self.schedule:
+            key = f"{x['jcd']}-{x['rno']}"
+            if key in self.store["picks"]:
+                continue
+            rec = self.store["odds"].get(key) or {}
+            mins = (x["deadline"] - now).total_seconds() / 60
+            if rec.get("e") and (rec.get("final") or 0 < mins <= 0.35):
+                out.append(key)
+        return out
+
+    def notify(self, keys: list[str]):
+        """ページと同じ計算（tools/pick.mjs）で買い目を決め、買いなら通知（ntfy）する"""
+        if not keys or not DAY_JSON.exists():
+            return
+        try:
+            r = subprocess.run(["node", str(ROOT / "tools" / "pick.mjs"), str(DAY_JSON), str(self.path()), ",".join(keys)],
+                               capture_output=True, text=True, timeout=60)
+            outs = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
+        except Exception as e:  # noqa: BLE001
+            log("買い目の計算に失敗:", e)
+            return
+        now = datetime.now(JST)
+        for o in outs:
+            key = o["key"]
+            final = bool((self.store["odds"].get(key) or {}).get("final"))
+            self.store["picks"][key] = {"state": o["state"], "picks": o["picks"], "at": now.isoformat(timespec="seconds"), "final": final}
+            self.dirty = True
+            if o["state"] != "buy" or not NOTIFY.get("topic"):
+                continue
+            stake = max(100, int(NOTIFY.get("bank", 500000) / 200 / 100) * 100)
+            combos = " ".join(p["combo"] for p in o["picks"])
+            detail = " / ".join(f"{p['combo']} {p['odds']:.1f}倍・確率{p['p'] * 100:.1f}%・期待値{p['ev']:.2f}" for p in o["picks"])
+            msg = {"topic": NOTIFY["topic"], "title": f"買い 2連単 {combos}｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
+                   "message": f"{detail}\n{stake:,}円（入金{NOTIFY.get('bank', 500000) // 10000}万円の1/200）{'' if final else '\n※締切1分前のオッズが取れず、早めのオッズで判定'}",
+                   "tags": ["moneybag"], "priority": 4, "click": NOTIFY.get("page", "")}
+            try:
+                res = self.s.post("https://ntfy.sh/", data=json.dumps(msg, ensure_ascii=False).encode("utf-8"), timeout=15)
+                log(f"通知 {key} {combos}（{res.status_code}）")
+                self.stats["notify"] = self.stats.get("notify", 0) + 1
+            except Exception as e:  # noqa: BLE001
+                log("通知に失敗:", e)
 
     def fetch_odds(self, x: dict):
         html = self.official("odds3t", x["jcd"], x["rno"])
@@ -423,7 +476,11 @@ class Live:
                 break
             self.capture_final(self.final_targets(now)[:3])  # 締切1分前の2連単オッズを最優先
             if self.dirty:
-                self.publish()                                # すぐ届ける
+                self.publish()                                # すぐ届ける（買い目の計算もこのファイルを読む）
+            nk = self.notify_targets(datetime.now(JST))
+            if nk:
+                self.notify(nk)
+                self.publish()
             busy = self.soon(datetime.now(JST))               # もうすぐ再取得するレースがあるなら、ほかは少しずつ
             self.capture_odds(self.odds_targets(now)[:3 if busy else 6])
             self.capture_many(self.targets(now)[:3 if busy else 12])

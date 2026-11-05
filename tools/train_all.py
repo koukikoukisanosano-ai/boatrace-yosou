@@ -170,6 +170,14 @@ def load_bet():
     R = json.loads(p.read_text())
     b = R["best"]
     mix = {("full" if k == "gbm" else k): v for k, v in R["combos"][b["prob"]].items()}
+    # 締切1分前の実際のオッズで十分に検証できたら（tools/odds_drift.py）、その買い方を使う
+    dp = ROOT / "docs" / "data" / "drift.json"
+    if dp.exists():
+        Dr = json.loads(dp.read_text())
+        if Dr.get("adopt") and Dr.get("best_t1"):
+            bt = Dr["best_t1"]
+            log("締切1分前のオッズで選んだ買い方を使います:", bt["rule"], bt["roi"], bt["bets"])
+            b = {**b, "rule": {**bt["rule"], "edge": 1.0}, "label": "2連単（締切1分前のオッズで検証）", "dev": bt, "hold": bt}
     return mix, {"kind": "exacta", "prob": b["prob"], "gamma": b["gamma"], "rule": {**b["rule"], "gamma": b["gamma"], "alpha": 1},
                  "label": b["label"], "dev": b["dev"], "hold": b["hold"], "hold_months": b.get("hold_months"), "when": R.get("when"),
                  "dev_months": R.get("dev"), "hold_period": R.get("hold")}

@@ -207,6 +207,12 @@ svg.sim text { font-size: 10px; fill: var(--muted); font-family: var(--num); }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--muted); margin-top: 2px; }
 .legend span::before { content: ''; display: inline-block; width: 12px; height: 3px; margin-right: 4px; vertical-align: middle; border-radius: 2px; }
 .legend .sim-dev::before { background: var(--faint); } .legend .sim-hold::before { background: var(--water); } .legend .sim-live::before { background: var(--ok); }
+.notify-btn { margin-left: auto; font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.notify-panel { font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; margin-top: 8px; }
+.notify-panel[hidden] { display: none; }
+.notify-panel p, .notify-panel ol { margin: 4px 0; }
+.notify-panel ol { padding-left: 1.3em; }
+.notify-panel a { color: var(--water); }
 #stake { font-size: 15px; color: var(--ink); }
 .mode button { font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
 .mode button[aria-pressed="true"] { border-color: var(--water); color: var(--water); background: var(--water-soft); font-weight: 700; }
@@ -258,8 +264,9 @@ div.rec .rule { font-size: 11px; color: var(--faint); margin-top: 2px; }
     <button type="button" data-mode="exhibit" aria-pressed="false">展示最重視</button>
   </div>
   <div class="mode" id="bankRow">
-    <span>入金額</span><input id="bank" type="number" inputmode="numeric" min="0" step="1000" aria-label="資金（円）"><span>円</span><span>1レース</span><b id="stake" class="num">100円</b>
+    <span>入金額</span><input id="bank" type="number" inputmode="numeric" min="0" step="1000" aria-label="資金（円）"><span>円</span><span>1レース</span><b id="stake" class="num">100円</b><button type="button" id="notifyBtn" class="notify-btn">通知</button>
   </div>
+  <div id="notifyPanel" class="notify-panel" hidden></div>
   <div class="venues" id="venues" role="group" aria-label="レース場"></div>
 </header>
 <main id="list"></main>

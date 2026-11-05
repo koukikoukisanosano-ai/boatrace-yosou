@@ -33,6 +33,7 @@ for (const ymd of dates) {
   const liveFile = path.join(ROOT, 'docs', 'live', `${compact}.json`);
   const live = fs.existsSync(liveFile) ? JSON.parse(fs.readFileSync(liveFile, 'utf8')) : null;
   if (live && live.odds) for (const r of races) { const o = live.odds[`${r.jcd}-${r.rno}`]; if (o && o.t) r.odds = { t: o.t, e: o.e }; }
+  const preds = {};   // その日のモデルで出した2連単の確率（オッズを混ぜる前）: 締切前オッズの動きの検証用（tools/odds_drift.py）
   const s = { date: ymd, model: model.version, races: 0, top1: 0, tri1: 0, tri1Ret: 0, tri5: 0, tri5Ret: 0, ex1: 0, ex1Ret: 0, withOdds: 0, rec: {} };
   for (const r of races) {
     if (!r.hasResult || r.preview === 'none') continue;
@@ -41,6 +42,12 @@ for (const ymd of dates) {
     const pr = predictRace(r, model, snap);
     if (!pr) continue;
     s.races++;
+    if (pr.base) {
+      const ex = {}; const B = pr.boats;
+      const perms = []; for (let a = 0; a < B.length; a++) for (let b = 0; b < B.length; b++) if (b !== a) for (let c = 0; c < B.length; c++) if (c !== a && c !== b) perms.push([a, b]);
+      pr.base.forEach((p, k) => { const key = `${B[perms[k][0]].waku}-${B[perms[k][1]].waku}`; ex[key] = (ex[key] || 0) + p; });
+      preds[`${r.jcd}-${r.rno}`] = Object.fromEntries(Object.entries(ex).map(([k, v]) => [k, +v.toPrecision(5)]));
+    }
     const winner = r.boats.find((b) => b.place === 1);
     const best = pr.probs.win.indexOf(Math.max(...pr.probs.win));
     if (winner && pr.boats[best].waku === winner.waku) s.top1++;
@@ -83,6 +90,9 @@ for (const ymd of dates) {
     }
   }
   if (!s.races) { console.error(`${ymd}: 対象レースなし`); continue; }
+  const pdir = path.join(ROOT, 'data', 'preds', ymd.slice(0, 4));
+  fs.mkdirSync(pdir, { recursive: true });
+  fs.writeFileSync(path.join(pdir, `${compact}.json.gz`), zlib.gzipSync(JSON.stringify({ model: model.version, rule: model.bet ? model.bet.rule : null, exacta: preds })));
   report.days = report.days.filter((d) => d.date !== ymd).concat([s]).sort((a, b) => (a.date < b.date ? -1 : 1)).slice(-120);
   console.log(`${ymd}: ${s.races}レース 1着的中 ${(100 * s.top1 / s.races).toFixed(1)}% 3連単上位5点 的中 ${(100 * s.tri5 / s.races).toFixed(1)}% 回収 ${(s.tri5Ret / (s.races * 500) * 100).toFixed(0)}%`);
 }
