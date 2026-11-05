@@ -89,8 +89,17 @@ def main():
         if r["id"] in need:
             races[r["id"]] = r
     combos = {cn: mix for cn, mix in COMBOS.items() if all(k in M[0] for k in mix)}
+    # 試しに作った予想（--variants）があれば、それ単体と「＋展示0.15」も候補に入れる（比べるため）
+    base_keys = {"tenkai", "tenkai_big", "ce", "gbm"}
+    extra = [k for k in M[0] if k not in base_keys | {"month", "ids", "present", "place"} and all(k in b for b in M)]
+    for k in extra:
+        combos[f"[試] {k}"] = {k: 1.0}
+        combos[f"[試] {k}＋展示0.15"] = {k: 0.85, "ce": 0.15}
+        combos[f"[試] {k}＋展開（大きめ）"] = {k: 0.5, "tenkai_big": 0.5}
+
     rules = rule_list()
     cands = [(cn, i) for cn in combos for i in range(len(rules))]
+    is_base = np.array([not cn.startswith("[試]") for cn, _ in cands])   # 試しの予想は比べるだけ（実際の買い方を選ぶ候補には入れない）
     stats = np.zeros((len(cands), len(M), 3))        # 点数・払戻合計・払戻の2乗合計（100円あたり）
     D = []
     for mi, b in enumerate(M):
@@ -116,7 +125,7 @@ def main():
         n, s, s2 = stats[:, prior, 0].sum(1), stats[:, prior, 1].sum(1), stats[:, prior, 2].sum(1)
         roi = np.where(n > 0, s / np.maximum(n, 1), 0)
         se = np.sqrt(np.maximum(s2 / np.maximum(n, 1) - roi ** 2, 0) / np.maximum(n, 1))
-        lb = np.where(n >= a.min_bets_per_month * mi, roi - se, -9)
+        lb = np.where((n >= a.min_bets_per_month * mi) & is_base, roi - se, -9)
         best = int(np.argmax(lb))
         cn, ri = cands[best]
         rule = rules[ri]
@@ -150,7 +159,7 @@ def main():
     n, s_, s2 = stats[:, :, 0].sum(1), stats[:, :, 1].sum(1), stats[:, :, 2].sum(1)
     roi = np.where(n > 0, s_ / np.maximum(n, 1), 0)
     se = np.sqrt(np.maximum(s2 / np.maximum(n, 1) - roi ** 2, 0) / np.maximum(n, 1))
-    lb = np.where(n >= a.min_bets_per_month * len(M), roi - se, -9)
+    lb = np.where((n >= a.min_bets_per_month * len(M)) & is_base, roi - se, -9)
     bi = int(np.argmax(lb)); cn, ri = cands[bi]
     nxt = {"prob": cn, "mix": combos[cn], "rule": rules[ri], "label": label(rules[ri]), "bets": int(n[bi]), "roi": round(float(roi[bi]), 4), "se": round(float(se[bi]), 4)}
     log("次の月に使う買い方:", json.dumps(nxt, ensure_ascii=False))
@@ -168,7 +177,16 @@ def main():
             j = idx[int(np.argmax(np.where(nn >= a.min_bets_per_month * mi, rr - ee, -9)))]
             xs.append(stats[j, mi])
         xs = np.array(xs); tb = xs[:, 0].sum()
-        by_prob[cn] = {"bets": int(tb), "roi": round(float(xs[:, 1].sum() / max(tb, 1)), 4)}
+        lls = []
+        for mi, m in enumerate(months):
+            if m < a.first_test:
+                continue
+            b = M[mi]; e = D[mi]["probs"][cn]
+            order = np.argsort(np.where(b["present"], b["place"], 99), 1)[:, :2]
+            okk = (np.take_along_axis(b["place"], order, 1) == [1, 2]).all(1)
+            tr = order[:, 0] * 5 + order[:, 1] - (order[:, 1] > order[:, 0])
+            lls.append(-np.log(np.clip(e[np.arange(len(e)), tr], 1e-12, 1))[okk])
+        by_prob[cn] = {"bets": int(tb), "roi": round(float(xs[:, 1].sum() / max(tb, 1)), 4), "logloss": round(float(np.concatenate(lls).mean()), 4)}
     log("混ぜ方ごと（公平）:", json.dumps(by_prob, ensure_ascii=False))
     out = {"next": nxt, "by_prob": by_prob, "months": results, "total": total, "reference_current_rule": ref, "first_test": a.first_test,
            "daily": [[dd, int(len(bd[dd])), round(float(bd[dd].sum()), 2)] for dd in ud]}

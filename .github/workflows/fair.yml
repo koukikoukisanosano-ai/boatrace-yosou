@@ -8,6 +8,9 @@ on:
       months:
         description: '予想し直す月（JSON の配列。空なら2026-01〜先月）'
         default: ''
+      variants:
+        description: '試しに作る予想（例 rank,tenkai_l63）。空なら本番と同じものだけ'
+        default: ''
 
 permissions:
   contents: write
@@ -52,7 +55,7 @@ jobs:
       - name: 学習用の表
         run: node --max-old-space-size=6144 tools/build_dataset.mjs work/full
       - name: その月より前だけで学習して、その月を予想
-        run: python tools/fair_fit.py --work work/full --month ${{ matrix.month }} --out fair_${{ matrix.month }}.pkl
+        run: python tools/fair_fit.py --work work/full --month ${{ matrix.month }} --out fair_${{ matrix.month }}.pkl --variants "${{ inputs.variants }}"
       - uses: actions/upload-artifact@v4
         with:
           name: fair_${{ matrix.month }}
