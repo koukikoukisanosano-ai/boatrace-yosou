@@ -442,9 +442,9 @@ function pairVec(spec, xc, xa, xb, t) {
 }
 
 export function prepareModel(json) {
-  for (const key of ['tenkai', 'tenkai_big']) {
+  for (const key of Object.keys(json).filter((k) => k.startsWith('tenkai'))) {
     const T = json[key];
-    if (!T) continue;
+    if (!T || !T.S) continue;
     T.S.featureMap = T.S.features.map((n) => FEATURE_INDEX[n]);
     T.N2.spec = compileSpec(T.N2.features);
     T.N3.spec = compileSpec(T.N3.features);
@@ -729,7 +729,7 @@ export function predictRace(race, model, hist, opts = {}) {
     // 回収率重視: いくつかのモデルを重み付きで掛け合わせる（オッズは混ぜない）。2連単の買い目はこの確率で選ぶ
     const tks = {};
     const get = (key) => {
-      if (key === 'tenkai' || key === 'tenkai_big') return (tks[key] = tks[key] || tenkai(model[key], X)).tri;
+      if (key.startsWith('tenkai')) return (tks[key] = tks[key] || tenkai(model[key], X)).tri;
       if (key === 'clogit') return plArray(softmax(clogitStrength(model.clogit, X)));
       return triArray(placeProbs(model[key], X));
     };
@@ -737,7 +737,7 @@ export function predictRace(race, model, hist, opts = {}) {
     const ps = keys.map(get);
     tri = geoMulti(ps, keys.map((k) => model.mix[k]));
     betTri = tri;
-    scen = tks.tenkai_big || tks.tenkai || (model.tenkai ? tenkai(model.tenkai, X) : null);
+    scen = tks.tenkai_big || tks.tenkai_xl || tks.tenkai_rw || tks.tenkai || (model.tenkai ? tenkai(model.tenkai, X) : null);
     if (model.ce) {
       const pce = placeProbs(model.ce, X);
       exhibit = pce.win;

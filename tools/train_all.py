@@ -119,17 +119,21 @@ def check(m, clf, X, multi=False):
     return diff
 
 
-TENKAI_PARAMS = {"tenkai": (300, 0.08, 15), "tenkai_big": (600, 0.05, 31)}
+# 名前: (木の本数, 学習率, 葉の数, 新しい日を重く見る半減期[日] or None)。tools/fair_fit.py と同じ
+TENKAI_PARAMS = {"tenkai": (300, 0.08, 15, None), "tenkai_big": (600, 0.05, 31, None),
+                 "tenkai_xl": (1000, 0.03, 31, None), "tenkai_rw": (600, 0.05, 31, 180)}
 
 
 def fit_tenkai(df, feats, name="tenkai"):
     """展開モデル S・N2・N3 を学習して書き出しの形で返す"""
-    n, lr, leaves = TENKAI_PARAMS[name]
+    n, lr, leaves, half = TENKAI_PARAMS[name]
     mk = lambda: tk_clf(n, lr, leaves)  # noqa: E731
+    end = pd.Timestamp(df.date.max()) + pd.Timedelta(days=1)
+    w = (lambda dates: 0.5 ** ((end - pd.to_datetime(dates)).dt.days.to_numpy() / half)) if half else (lambda dates: None)
     vc = T.venue_course_rates(df)
     d = T.fill_vc(df, vc)
     X = d[feats].to_numpy(float)
-    S = mk().fit(X, winner_class(d))
+    S = mk().fit(X, winner_class(d), sample_weight=w(d.date))
     out = {"S": {"features": feats, **T.export_multiclass(S)}}
     e = check(out["S"], S, X, multi=True)
     del X
@@ -137,8 +141,9 @@ def fit_tenkai(df, feats, name="tenkai"):
         r = pair_rows(d, feats, st)
         pf = pair_feats(feats, st)
         Xp, y = r[pf].to_numpy(float), r.y.to_numpy()
+        wr = w(pd.to_datetime(r.race.str[:8]).dt.strftime("%Y-%m-%d"))
         del r
-        m = mk().fit(Xp, y)
+        m = mk().fit(Xp, y, sample_weight=wr)
         out[f"N{st}"] = {"features": pf, **T.export_model(m, len(pf))}
         e = max(e, check(out[f"N{st}"], m, Xp))
         del Xp
@@ -170,6 +175,17 @@ def load_bet():
     R = json.loads(p.read_text())
     b = R["best"]
     mix = {("full" if k == "gbm" else k): v for k, v in R["combos"][b["prob"]].items()}
+    # 公平な検証（tools/fair_eval.py: 月ごとに学習し直し、その時点までの成績で選ぶ）があれば、その「次の月の買い方」を使う
+    fp = ROOT / "docs" / "data" / "fair.json"
+    if fp.exists():
+        Fj = json.loads(fp.read_text())
+        nx = Fj.get("next")
+        if nx:
+            mix = {("full" if k == "gbm" else k): v for k, v in nx["mix"].items()}
+            tot = Fj.get("total", {})
+            b = {**b, "prob": nx["prob"], "gamma": 1.0, "rule": {**nx["rule"]}, "label": f"2連単 {nx['label']}",
+                 "dev": {"roi": nx["roi"], "se": nx["se"], "bets": nx["bets"]}, "hold": {"roi": tot.get("roi", nx["roi"]), "se": tot.get("se", nx["se"]), "bets": tot.get("bets", nx["bets"]), "hit": 0}}
+            log("公平な検証で選んだ買い方を使います:", nx["prob"], nx["label"])
     # 通知する時点（締切約5分前）の実際のオッズで十分に検証できたら（tools/odds_drift.py）、その買い方を使う
     dp = ROOT / "docs" / "data" / "drift.json"
     if dp.exists():
