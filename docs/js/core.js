@@ -793,7 +793,7 @@ export function predictRace(race, model, hist, opts = {}) {
       const p = scen.S[a][t];
       if (p < 0.02) continue;
       const follow = [];
-      for (let b = 0; b < n; b++) if (b !== a) for (let c = 0; c < n; c++) if (c !== a && c !== b) follow.push({ combo: `${boats[a].waku}-${boats[b].waku}-${boats[c].waku}`, p: scen.p2[a][t][b] * scen.p3[a][b][c] });
+      for (let b = 0; b < n; b++) if (b !== a) follow.push({ waku: boats[b].waku, combo: `${boats[a].waku}-${boats[b].waku}`, p: scen.p2[a][t][b] });
       follow.sort((x, y) => y.p - x.p);
       list.push({ waku: boats[a].waku, course: course[a], tech: t, name: TECH_NAMES[t], p, follow: follow.slice(0, 3) });
     }

@@ -1,5 +1,5 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
-import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, oddsMap, exactaMap, evPicks, formation, FEATURE_INDEX, RANK_LABEL } from './core.js';
+import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, evPicks, formation, FEATURE_INDEX, RANK_LABEL } from './core.js';
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -120,8 +120,6 @@ async function refresh(full = false) {
     await loadModel();
     if (full || !state.snap) { await loadSnapshot(state.date); predKey.clear(); }
     if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
-    if (!state.research) { try { state.research = (await getJSON('data/research.json', 'no-cache')).json; } catch (e) { state.research = null; } }
-    if (!state.ev) { try { state.ev = (await getJSON('data/research_ev.json', 'no-cache')).json; } catch (e) { state.ev = null; } }
     if (!state.exa) { try { state.exa = (await getJSON('data/research_exacta.json', 'no-cache')).json; } catch (e) { state.exa = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
     mergeLive(races, live);
@@ -188,10 +186,12 @@ function renderStatus() {
   $('#dateLabel').textContent = `${+d.slice(5, 7)}/${+d.slice(8, 10)}${d === jstToday() ? ' 今日' : ''}`;
 }
 
+// 締切前: これから締切のレースと、締切から30分以内のレース（結果が出るまで見やすいように残す）
+const KEEP_MIN = 30;
 function filtered() {
   let rs = state.races.filter((r) => state.venue === 0 || r.jcd === state.venue);
-  if (state.view === 'upcoming') rs = rs.filter((r) => !r.hasResult && minsLeft(r) > -3);
-  else rs = rs.filter((r) => r.hasResult || minsLeft(r) <= -3).reverse();
+  if (state.view === 'upcoming') rs = rs.filter((r) => minsLeft(r) > -KEEP_MIN);
+  else rs = rs.filter((r) => minsLeft(r) <= -KEEP_MIN || (r.hasResult && minsLeft(r) <= 0)).reverse();
   return rs;
 }
 
@@ -203,15 +203,21 @@ function leftText(r) {
   return `あと${Math.floor(m / 60)}時間${Math.ceil(m % 60)}分`;
 }
 
+function exactaResult(r) {
+  const ex = r.payouts.exacta || [];
+  return ex.length ? ex : null;
+}
 function topHit(r, pr) {
-  const tp = (r.payouts.trifecta || []).map((x) => x.combo);
+  const ex = (exactaResult(r) || []).map((x) => x.combo);
   const winner = r.boats.find((b) => b.place === 1);
   const best = pr.probs.win.indexOf(Math.max(...pr.probs.win));
-  return {
-    win: winner ? pr.boats[best].waku === winner.waku : null,
-    tri5: tp.length ? pr.trifecta.slice(0, 5).some((t) => tp.includes(t.combo)) : null,
-    tri1: tp.length ? tp.includes(pr.trifecta[0].combo) : null,
-  };
+  return { win: winner ? pr.boats[best].waku === winner.waku : null, ex1: ex.length ? ex.includes(pr.exacta[0].combo) : null };
+}
+function betResult(r, x) {
+  if (x.state !== 'buy' || !r.hasResult) return null;
+  const ex = exactaResult(r) || [];
+  const h = x.picks.map((p) => ex.find((e) => e.combo === p.combo)).find(Boolean);
+  return { hit: !!h, amount: h ? h.amount : 0, cost: x.picks.length * 100 };
 }
 
 function raceRow(r) {
@@ -226,19 +232,15 @@ function raceRow(r) {
     strip = `<span class="strip" aria-label="1着の確率">${segs.map((s) => `<span class="w${s.w}" style="width:${(s.p * 100).toFixed(2)}%">${s.p >= 0.07 ? s.w : ''}</span>`).join('')}</span>`;
     const order = pr.boats.map((b, i) => [b.waku, pr.probs.win[i]]).sort((a, b) => b[1] - a[1]);
     const marks = order.slice(0, 4).map(([w], i) => `${MARKS[i]}${w}`).join(' ');
-    const t = pr.trifecta[0];
-    let hit = '';
-    if (r.hasResult) {
-      const h = topHit(r, pr);
-      hit = `<span class="hitmark ${h.win ? 'yes' : 'no'}">1着${h.win ? '的中' : '外れ'}</span><span class="hitmark ${h.tri5 ? 'yes' : 'no'}">3連単5点${h.tri5 ? '的中' : '外れ'}</span>`;
-    }
-    const pv = r.preview === 'none' ? '<span class="pv none">展示前</span>' : '<span class="pv full">直前反映</span>';
+    const t = pr.exacta[0];
     const xb = exactaPicks(r, pr);
-    const betTag = xb.state === 'buy' ? `<span class="bet buy">2連単 ${formation(xb.picks.map((p) => p.combo)).join(' ')}</span>`
-      : xb.state === 'pass' ? '<span class="bet pass">2連単 見送り</span>' : '';
-    picks = `<span class="picks"><span class="marks">${marks}</span><span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${betTag}${r.hasResult ? hit : pv}</span>`;
+    const br = betResult(r, xb);
+    const betTag = xb.state === 'buy' ? `<span class="bet buy">買い ${formation(xb.picks.map((p) => p.combo)).join(' ')}</span>${br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 ${br.amount.toLocaleString()}円` : '外れ'}</span>` : ''}`
+      : xb.state === 'pass' ? '<span class="bet pass">見送り</span>' : '';
+    const pv = r.preview === 'none' ? '<span class="pv none">展示前</span>' : '';
+    picks = `<span class="picks"><span class="marks">${marks}</span><span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${betTag}${pv}</span>`;
   } else {
-    picks = '<span class="picks">予想できません（出走表が不足）</span>';
+    picks = '<span class="picks">予想できません</span>';
   }
   return `<article class="race" id="r-${r.id}">
     <button type="button" class="race-head" aria-expanded="${open}" data-id="${r.id}">
@@ -256,17 +258,15 @@ function fx(pr, i, name) { const v = pr.X[i][FEATURE_INDEX[name]]; return Number
 const fmtST = (v) => (v === null || v === undefined ? '-' : v < 0 ? `F${Math.abs(v).toFixed(2).slice(1)}` : v.toFixed(2).slice(v < 1 ? 1 : 0));
 
 function raceDetail(r, pr) {
-  if (!pr) return '<p class="explain">出走表が足りないため予想できません。</p>';
+  if (!pr) return '';
   const cond = [];
   if (r.weather) cond.push(`天候 <b>${WEATHER[r.weather] || '-'}</b>`);
   if (r.wind !== null && r.wind !== undefined) cond.push(`風 <b>${r.wind}m</b>${r.windDir && r.windDir !== 17 ? ` ${WIND[r.windDir]}` : ''}`);
   if (r.wave !== null && r.wave !== undefined) cond.push(`波 <b>${r.wave}cm</b>`);
   if (r.waterTemp) cond.push(`水温 ${r.waterTemp}℃`);
-  let src = '展示前（出走表だけの予想）';
-  if (r.preview !== 'none') src = r.previewFrom === 'live' ? `直前情報 反映済み（公式サイトから${r.previewAt ? ` ${hhmm(r.previewAt)}` : ''}取得）` : '直前情報 反映済み';
+  cond.push(r.preview === 'none' ? '展示前' : '直前情報 反映済み');
   const boats = pr.boats;
-  const all = r.boats;
-  const rows = all.map((b) => {
+  const rows = r.boats.map((b) => {
     const i = boats.findIndex((x) => x.waku === b.waku);
     if (i < 0) return `<div class="boat absent">${chip(b.waku)}<div><div class="bn">${esc(b.name)}<small>欠場</small></div></div><div></div></div>`;
     const exRank = fx(pr, i, 'exTimeRank');
@@ -288,58 +288,47 @@ function raceDetail(r, pr) {
     const f2 = (v) => (v === null || v === undefined ? '-' : v.toFixed(2));
     const stats = [`勝率 ${f2(b.natWin)}`, `当地 ${f2(b.locWin)}`, `モーター ${b.motor2 !== null ? b.motor2.toFixed(1) : '-'}%`, `平均ST ${fmtST(b.avgST)}`];
     if (b.F) stats.push(`<span class="warn">F${b.F}</span>`);
-    const p1 = pr.probs.win[i], p2 = pr.probs.top2[i], p3 = pr.probs.top3[i];
+    const p1 = pr.probs.win[i], p2 = pr.probs.top2[i];
     const bar = (label, p) => `<div class="bar"><span>${label}</span><span class="track"><i style="width:${(p * 100).toFixed(1)}%"></i></span></div>`;
     return `<div class="boat">${chip(b.waku)}
       <div><div class="bn">${esc(b.name)}<small>${RANK_LABEL[b.rank] || ''} ${b.age ?? ''}歳 ${esc(b.branch)}</small></div>
         ${pre.length ? `<div class="bx">${pre.map((x) => `<span class="nb">${x}</span>`).join(' ')}</div>` : ''}
         <div class="bx">${stats.map((x) => `<span class="nb">${x}</span>`).join(' ')}</div></div>
       <div class="bp"><div class="big">${pct(p1)}<small>%</small></div>
-        <div class="bars">${bar('1着', p1)}${bar('2連', p2)}${bar('3連', p3)}</div></div>
+        <div class="bars">${bar('1着', p1)}${bar('2連', p2)}</div></div>
     </div>`;
   }).join('');
 
-  const tp = (r.payouts.trifecta || []).map((x) => x.combo);
-  const top = pr.trifecta.slice(0, 8);
-  const om = r.odds ? oddsMap(r.odds.t) : null;
-  const bets = top.map((t) => {
-    const hit = tp.includes(t.combo);
+  // 2連単: 確率の高い順（オッズがあれば期待値）
+  const paid = (exactaResult(r) || []).map((x) => x.combo);
+  const om = r.odds && r.odds.e ? exactaMap(r.odds.e) : null;
+  const bets = pr.exacta.slice(0, 10).map((t) => {
+    const hit = paid.includes(t.combo);
     const o = om && om[t.combo];
     const right = o ? `<b>${o.toFixed(1)}</b>倍 期待値<b class="${o * t.p >= 1 ? 'good' : ''}">${(o * t.p).toFixed(2)}</b>` : `目安 <b>${(1 / t.p).toFixed(1)}</b>倍`;
     return `<div class="${hit ? 'hit' : ''}">${comboHtml(t.combo)}</div><div class="p ${hit ? 'hit' : ''}">${pct(t.p, 1)}%</div><div class="o ${hit ? 'hit' : ''}">${right}</div>`;
   }).join('');
-  const cum5 = pr.trifecta.slice(0, 5).reduce((a, t) => a + t.p, 0);
-  const minor = (list, n, label) => `<div><b>${label}</b> ${list.slice(0, n).map((x) => `${comboHtml(x.combo)}<span class="p">${pct(x.p)}%</span>`).join('　')}</div>`;
-  const oddsNote = r.odds
-    ? `オッズは締切前の${r.odds.site ? ` ${esc(r.odds.site)}` : r.odds.at ? ` ${hhmm(r.odds.at)}` : ''}時点（公式サイトから自動取得）。予想にもこのオッズを混ぜています。期待値＝確率×オッズ（1より大きいと、予想どおりなら得）。締切直前にオッズは動くので、買う前にアプリで最新のオッズを確認してください。`
-    : '目安＝確率から計算したつり合いの倍率。実際のオッズがこれより高ければ、予想どおりなら得な買い目です（締切7〜2分前にオッズを自動取得すると、オッズと期待値を表示します）。';
+  const oddsAt = om ? `オッズ ${r.odds.site ? esc(r.odds.site) : r.odds.at ? hhmm(r.odds.at) : ''}時点` : '目安＝つり合いの倍率';
 
   let result = '';
   if (r.hasResult) {
     const order = r.boats.filter((b) => b.place).sort((a, b) => a.place - b.place).map((b) => b.waku);
-    const pay = (r.payouts.trifecta || [])[0];
-    const h = topHit(r, pr);
-    result = `<h3>結果</h3><div class="result">${comboHtml(order.slice(0, 3).join('-'))}${pay ? `<span>3連単 <span class="pay">${pay.amount.toLocaleString()}</span>円</span>` : ''}
-      <span class="hitmark ${h.win ? 'yes' : 'no'}">1着予想 ${h.win ? '的中' : '外れ'}</span><span class="hitmark ${h.tri5 ? 'yes' : 'no'}">3連単上位5点 ${h.tri5 ? '的中' : '外れ'}</span></div>`;
+    const pay = (exactaResult(r) || [])[0];
+    result = `<h3>結果</h3><div class="result">${comboHtml(order.slice(0, 2).join('-'))}${pay ? `<span>2連単 <span class="pay">${pay.amount.toLocaleString()}</span>円</span>` : ''}</div>`;
   }
 
-  return `<div class="cond">${cond.map((c) => `<span>${c}</span>`).join('')}<span>${src}</span></div>
+  return `<div class="cond">${cond.map((c) => `<span>${c}</span>`).join('')}</div>
     ${evHtml(r, pr)}
-    ${rows}
-    ${pr.exhibit ? `<p class="explain">展示評価＝枠（コース）と展示航走（展示タイム・スタート展示・チルト・部品交換など）だけで見た1着の確率。${state.mode === 'exhibit' ? '「展示最重視」なので、上の確率にはこの評価を強く混ぜています（2連単の買い目は回収率重視の予想で選びます）。' : '「展示最重視」に切り替えると、この評価を強く混ぜた確率を表示します。'}</p>` : ''}
-    ${tenkaiHtml(pr)}
-    ${recommendHtml(r, pr)}
-    <h3>3連単の確率<small>上位5点で ${pct(cum5)}%${pr.withOdds ? '・オッズ反映' : ''}</small></h3>
+    <h3>2連単の確率<small>${oddsAt}</small></h3>
     <div class="bets">${bets}</div>
-    <p class="explain">${oddsNote}</p>
-    <h3>ほかの券種</h3>
-    <div class="minor">${minor(pr.exacta, 3, '2連単')}${minor(pr.trio, 3, '3連複')}${minor(pr.quinella, 2, '2連複')}${minor(pr.wide, 3, '拡連複')}${minor(pr.place, 2, '複勝')}</div>
+    ${rows}
+    ${tenkaiHtml(pr)}
     <h3>予想の根拠</h3>
     <ul class="reasons">${reasons(r, pr).map((x) => `<li>${x}</li>`).join('')}</ul>
     ${result}`;
 }
 
-// 展開予想: 誰が・どの決まり手で勝つか、その展開での2・3着
+// 展開: 誰が・どの決まり手で勝つか、その展開での2着
 function tenkaiHtml(pr) {
   if (!pr.scenarios || !pr.scenarios.length) return '';
   const top = pr.scenarios.slice(0, 5);
@@ -347,14 +336,12 @@ function tenkaiHtml(pr) {
   const rows = top.map((s) => `<div class="sc">
       <div class="sc-h">${chip(s.waku)}<span class="sc-n">${s.course}コース <b>${esc(s.name)}</b></span><span class="sc-p num">${pct(s.p)}%</span></div>
       <div class="sc-bar"><i style="width:${(s.p / max * 100).toFixed(1)}%"></i></div>
-      <div class="sc-f">続く並び ${s.follow.map((f) => `${comboHtml(f.combo)}<span class="p">${pct(f.p)}%</span>`).join('　')}</div>
+      <div class="sc-f">2着 ${s.follow.map((f) => `${chip(f.waku)}<span class="p">${pct(f.p)}%</span>`).join('　')}</div>
     </div>`).join('');
-  return `<h3>展開の予想<small>選手の組み合わせから、決まり手ごとに着順を予想</small></h3>${rows}
-    <p class="explain">展開の確率は展開モデルだけの値（展示評価やオッズを混ぜる前）。「続く並び」はその展開になったときの2・3着の確率です（展開ごとに、1着艇との並び・コースの差・選手の力と展示の差から計算）。</p>`;
+  return `<h3>展開の予想</h3>${rows}`;
 }
 
-// 2連単の買い目（メイン）: 学習で選んだ決め方（model.bet = research_exacta.json の結果）で、締切前の2連単オッズから選ぶ
-//   確率はモデルだけ（オッズは混ぜない）。オッズは値段＝期待値の計算にだけ使う
+// 2連単の買い目: 学習で選んだ決め方（model.bet）で、締切前の2連単オッズから選ぶ。確率にオッズは混ぜない
 const DEFAULT_BET = { t: 1.2, minp: 0.02, maxo: 60, k: 2, edge: 1, alpha: 1 };
 function betRule() {
   const b = state.model && state.model.bet;
@@ -368,58 +355,26 @@ function exactaPicks(r, pr) {
   return { state: res.picks.length ? 'buy' : 'pass', ...res };
 }
 function ruleText(rule) {
-  return `期待値${rule.t}以上${rule.minp ? `・確率${pct(rule.minp)}%以上` : ''}${rule.edge > 1 ? `・市場の${rule.edge}倍以上の確率` : ''}・${rule.maxo}倍以下・期待値の高い${rule.k}点まで`;
+  return `期待値${rule.t}以上${rule.minp ? `・確率${pct(rule.minp)}%以上` : ''}${rule.edge > 1 ? `・市場の${rule.edge}倍以上` : ''}・${rule.maxo}倍以下・${rule.k}点`;
 }
 function evHtml(r, pr) {
   if (r.preview === 'none' || !pr.base) return '';
   const { rule, info } = betRule();
-  const past = info ? `<small>本番テスト（${esc((info.hold_period || []).join('・'))}）: 回収${pct(info.hold.roi)}%（±${pct(info.hold.se)}）・的中${pct(info.hold.hit, 1)}%・${info.hold.bets.toLocaleString()}点</small>` : '';
+  const past = info ? `<small>検証 回収${pct(info.hold.roi)}%・的中${pct(info.hold.hit, 1)}%</small>` : '';
   const x = exactaPicks(r, pr);
   let body;
   if (x.state === 'buy') {
     const combos = x.picks.map((p) => p.combo);
-    const ptot = x.picks.reduce((a, p) => a + p.p, 0);
-    const paid = (r.payouts.exacta || []).map((p) => p.combo);
-    const hitc = combos.find((c) => paid.includes(c));
-    const hit = r.hasResult ? `<span class="hitmark ${hitc ? 'yes' : 'no'}">${hitc ? `的中 ${((r.payouts.exacta || []).find((p) => p.combo === hitc).amount).toLocaleString()}円` : '外れ'}</span>` : '';
-    body = `<table class="ev"><thead><tr><th></th><th>確率</th><th>オッズ</th><th>期待値</th><th>市場比</th></tr></thead><tbody>${x.picks.map((p) => `<tr><td>${comboHtml(p.combo)}</td><td>${pct(p.p, 1)}%</td><td>${p.odds.toFixed(1)}倍</td><td class="good">${p.ev.toFixed(2)}</td><td>${p.edge.toFixed(2)}倍</td></tr>`).join('')}</tbody></table>
-      <div class="ev-sum">買い目 <b class="num">${formation(combos).join('　')}</b>（${combos.length}点・各100円で${combos.length * 100}円）　当たる確率 計${pct(ptot)}% ${hit}</div>`;
+    const br = betResult(r, x);
+    const hit = br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 ${br.amount.toLocaleString()}円` : '外れ'}</span>` : '';
+    body = `<div class="ev-sum"><b class="num big-bet">${formation(combos).join('　')}</b>${x.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値 <b class="good">${p.ev.toFixed(2)}</b></span>`).join('')} ${hit}</div>`;
   } else if (x.state === 'pass') {
-    const near = x.top.slice(0, 3).map((p) => `${comboHtml(p.combo)} ${p.odds.toFixed(1)}倍 期待値${p.ev.toFixed(2)}`).join('　');
-    body = `<div class="ev-sum"><b>見送り</b>（条件に合う買い目なし）。期待値の高い順: ${near}</div>`;
+    body = '<div class="ev-sum"><b>見送り</b></div>';
   } else {
-    // オッズがまだ無いとき: この倍率以上なら期待値が条件を超える、という目安
-    const list = pr.exacta.filter((p) => p.p >= (rule.minp || 0)).slice(0, 4);
-    body = `<div class="ev-sum">締切7〜2分前に2連単オッズを取ると選びます。目安: ${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, 1).toFixed(1)}</b>倍以上${rule.maxo < 1e8 && rule.t / p.p > rule.maxo ? '（上限超え）' : ''}`).join('　')}</div>`;
+    const list = pr.exacta.filter((p) => p.p >= (rule.minp || 0)).slice(0, 3);
+    body = `<div class="ev-sum">オッズ待ち　${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, 1).toFixed(1)}</b>倍以上で買い`).join('　')}</div>`;
   }
-  return `<h3>2連単の買い目<small>期待値＝確率×オッズ</small></h3>
-    <div class="rec main-bet"><div class="rec-h"><b>${esc(ruleText(rule))}</b>${past}</div>${body}</div>
-    <p class="explain">確率はオッズを混ぜない、予想だけの値です（オッズは値段として期待値の計算にだけ使います）。市場比＝予想の確率がオッズから見た確率の何倍か。締切直前にオッズは動くので、買う前に最新のオッズで期待値を確かめてください。過去の検証は確定オッズで計算しているため、締切前のオッズで買う実際の成績とはずれます（毎日の記録で確認中）。</p>`;
-}
-
-// おすすめの買い方: 予想方法の比較（research.json）で、開発期間で選び本番テスト期間で確かめた買い方
-const BET_LABEL = { trifecta: '3連単', trio: '3連複', exacta: '2連単', quinella: '2連複', quinella_place: '拡連複', win: '単勝', place: '複勝' };
-const BET_LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
-function recommendHtml(r, pr) {
-  const recs = (state.research && state.research.recommend) || [];
-  // 展開モデルでは確率の出方が違うので、前の予想方法で選んだ買い方は出さない（期待値の買い目を使う）
-  if (!recs.length || r.preview === 'none' || (state.model && state.model.tenkai)) return '';
-  const rows = [];
-  for (const rc of recs) {
-    const list = pr[BET_LIST[rc.bet]] || [];
-    if (!list.length) continue;
-    const conf = rc.rule.conf || 0;
-    const ok = list[0].p >= conf;
-    const picks = list.slice(0, rc.rule.k);
-    const paid = (r.payouts[rc.bet] || []).map((x) => x.combo);
-    const hit = r.hasResult && picks.some((x) => paid.includes(x.combo));
-    const res = r.hasResult && ok ? `<span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? '的中' : '外れ'}</span>` : '';
-    rows.push(`<div class="rec ${ok ? '' : 'off'}">
-      <div class="rec-h"><b>${esc(rc.title)}</b><small>過去の成績: 的中${pct(rc.hold.hit)}%・回収${pct(rc.hold.roi)}%</small></div>
-      <div class="rec-b">${ok ? picks.map((x) => `${comboHtml(x.combo)} <span class="p">${pct(x.p)}%</span>`).join('　') : `<span class="explain">このレースは対象外（本命の確率 ${pct(list[0].p)}% ＜ ${pct(conf)}%）</span>`} ${res}</div>
-    </div>`);
-  }
-  return rows.length ? `<h3>おすすめの買い方<small>過去の比較で選んだ方法</small></h3>${rows.join('')}` : '';
+  return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>`;
 }
 
 // 根拠: 特徴量の値から、目立つ点を文章にする
@@ -438,8 +393,6 @@ function reasons(r, pr) {
     if (stBest >= 0) out.push(`スタート展示で一番早い ${name(stBest)}（${fmtST(B[stBest].exST)}）`);
     const flying = B.filter((b) => b.exST !== null && b.exST < 0);
     if (flying.length) out.push(`スタート展示でフライング: ${flying.map((b) => chip(b.waku)).join(' ')}`);
-  } else {
-    out.push('まだ展示前のため、出走表と近況だけで計算しています。展示が終わると自動で直前情報を加えて計算し直します。');
   }
   if (c1 >= 0) {
     const vc = fx(pr, c1, 'vcWin'); const own = fx(pr, c1, 'pCourseWin');
@@ -454,116 +407,61 @@ function reasons(r, pr) {
   if (good.length) out.push(`本命 ${name(top)}: ${good.join('、')}`);
   for (const i of idx.slice(1, 3)) {
     const sv = fx(pr, i, 'exSTvsInner');
-    if (sv !== null && sv <= -0.05 && pr.course[i] >= 2) out.push(`${name(i)} は内側の艇より展示STが ${Math.abs(sv).toFixed(2)} 早い（攻めやすい）`);
+    if (sv !== null && sv <= -0.05 && pr.course[i] >= 2) out.push(`${name(i)} は内側の艇より展示STが ${Math.abs(sv).toFixed(2)} 早い`);
   }
   const fs = B.filter((b) => b.F > 0);
-  if (fs.length) out.push(`F持ち（スタートを控えやすい）: ${fs.map((b) => chip(b.waku)).join(' ')}`);
+  if (fs.length) out.push(`F持ち: ${fs.map((b) => chip(b.waku)).join(' ')}`);
   return out;
 }
 
 function renderScore(rs) {
-  const done = rs.filter((r) => r.hasResult && state.preds.get(r.id) && (r.payouts.trifecta || []).length);
+  const done = rs.filter((r) => r.hasResult && state.preds.get(r.id) && exactaResult(r));
   if (!done.length) return '';
-  let win = 0, tri5 = 0, ret = 0, cost = 0;
+  let win = 0, ex1 = 0, bets = 0, ret = 0, hits = 0;
   for (const r of done) {
     const pr = state.preds.get(r.id);
     const h = topHit(r, pr);
-    win += h.win ? 1 : 0;
-    tri5 += h.tri5 ? 1 : 0;
-    const tp = r.payouts.trifecta || [];
-    for (const t of pr.trifecta.slice(0, 5)) { cost += 100; const x = tp.find((p) => p.combo === t.combo); if (x) ret += x.amount; }
+    win += h.win ? 1 : 0; ex1 += h.ex1 ? 1 : 0;
+    const br = betResult(r, exactaPicks(r, pr));
+    if (br) { bets += br.cost / 100; ret += br.amount; hits += br.hit ? 1 : 0; }
   }
-  const m = state.model || {};
-  let caveat = '';
-  if (m.trained_until && state.date <= m.trained_until) caveat = 'この日のレースは予想モデルの学習に使われているため、実際より良い成績になります（参考）。ずるの無い成績は下の「毎日の記録」を見てください。';
-  else if (!state.snapExact) caveat = 'この日の選手の近況データが無いため、別の日の近況で計算しています（参考）。';
   return `<section class="score"><h2>答え合わせ（${done.length}レース）</h2><div class="grid">
     <div><div class="k">1着の的中</div><div class="v">${pct(win / done.length)}<small>%</small></div></div>
-    <div><div class="k">3連単 上位5点の的中</div><div class="v">${pct(tri5 / done.length)}<small>%</small></div></div>
-    <div><div class="k">上位5点を100円ずつ</div><div class="v">${pct(ret / cost)}<small>%回収</small></div></div>
-  </div>${caveat ? `<p class="explain">${caveat}</p>` : ''}</section>`;
+    <div><div class="k">2連単 本命の的中</div><div class="v">${pct(ex1 / done.length)}<small>%</small></div></div>
+    <div><div class="k">買い目 ${bets}点 的中${hits}</div><div class="v">${bets ? pct(ret / (bets * 100)) : '-'}<small>%回収</small></div></div>
+  </div></section>`;
 }
 
-// 毎日の記録（その日の朝の時点の近況とモデルで予想し直した、ずるの無い成績）
+// 毎日の記録（その日の朝の時点の近況とモデルで予想し直した成績）
+const REC_KEY = '2連単 期待値の買い目（メイン）';
 function renderRecord() {
-  const days = (state.report && state.report.days) || [];
-  if (!days.length) return '<section class="score"><h2>毎日の記録</h2><p class="explain">毎朝、前日の答え合わせを自動で記録します（明日の朝から表示されます）。</p></section>';
+  const days = ((state.report && state.report.days) || []).filter((d) => d.rec && d.rec[REC_KEY]);
+  if (!days.length) return '';
   const recent = days.slice(-14).reverse();
-  const tot = days.slice(-30).reduce((a, d) => { a.r += d.races; a.w += d.top1; a.t5 += d.tri5; a.ret += d.tri5Ret; return a; }, { r: 0, w: 0, t5: 0, ret: 0 });
-  const rows = recent.map((d) => `<tr><td>${+d.date.slice(5, 7)}/${+d.date.slice(8)}</td><td>${d.races}</td><td>${pct(d.top1 / d.races)}%</td><td>${pct(d.tri5 / d.races)}%</td><td>${pct(d.tri5Ret / (d.races * 500))}%</td></tr>`).join('');
-  const recTot = {};
-  for (const d of days.slice(-30)) for (const [k, v] of Object.entries(d.rec || {})) { const t = recTot[k] || (recTot[k] = { bets: 0, hits: 0, ret: 0 }); t.bets += v.bets; t.hits += v.hits; t.ret += v.ret; }
-  const recRows = Object.entries(recTot).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.bets}</td><td>${pct(v.hits / Math.max(v.bets, 1))}%</td><td>${pct(v.ret / Math.max(v.bets * 100, 1))}%</td></tr>`).join('');
-  return `<section class="score"><h2>毎日の記録（直近${Math.min(days.length, 30)}日: 1着 ${pct(tot.w / tot.r, 1)}%、3連単5点 的中 ${pct(tot.t5 / tot.r, 1)}%、回収 ${pct(tot.ret / (tot.r * 500))}%）</h2>
-    <table class="rec"><thead><tr><th>日付</th><th>レース</th><th>1着</th><th>3連単5点</th><th>回収</th></tr></thead><tbody>${rows}</tbody></table>
-    ${recRows ? `<h3>買い方の実際の成績（直近${Math.min(days.length, 30)}日）</h3><table class="rec"><thead><tr><th>買い方</th><th>点数</th><th>的中</th><th>回収</th></tr></thead><tbody>${recRows}</tbody></table>` : ''}
-    <p class="explain">その日の朝の時点のデータと予想モデルで計算し直した成績です（後から分かった結果は使っていません）。</p></section>`;
+  const tot = days.slice(-30).reduce((a, d) => { const x = d.rec[REC_KEY]; a.b += x.bets; a.h += x.hits; a.ret += x.ret; return a; }, { b: 0, h: 0, ret: 0 });
+  const rows = recent.map((d) => { const x = d.rec[REC_KEY]; return `<tr><td>${+d.date.slice(5, 7)}/${+d.date.slice(8)}</td><td>${x.bets}</td><td>${x.hits}</td><td>${pct(x.ret / Math.max(x.bets * 100, 1))}%</td><td>${pct((d.ex1 || 0) / d.races)}%</td></tr>`; }).join('');
+  return `<section class="score"><h2>毎日の記録（直近${Math.min(days.length, 30)}日 ${tot.b}点 回収${pct(tot.ret / Math.max(tot.b * 100, 1))}%）</h2>
+    <table class="rec"><thead><tr><th>日付</th><th>買い目</th><th>的中</th><th>回収</th><th>本命的中</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
-// 予想方法の比較（research.json）
-// 2連単（メイン）の比較: research_exacta.json
-function renderExacta() {
+// 2連単の買い方の比較（research_exacta.json）
+function renderResearch() {
   const E = state.exa;
-  if (!E) return '';
+  if (!E) return '<div class="note">比較の結果はまだありません。</div>';
   const pt = (E.prob_table || []).filter((x) => x.gamma === 1 || x.name.startsWith('市場'));
-  const nameOf = (n) => ({ tenkai: '展開モデル（標準）', tenkai_big: '展開モデル（大きめ）', gbm: '機械学習（1着・2連対・3連対）', clogit: '条件付きロジット', ce: '枠＋展示航走だけ' }[n] || n);
+  const nameOf = (n) => ({ tenkai: '展開モデル（標準）', tenkai_big: '展開モデル（大きめ）', gbm: '機械学習', clogit: '条件付きロジット', ce: '枠＋展示航走だけ' }[n] || n);
   const probRows = pt.map((x) => `<tr class="${x.name === E.best.prob ? 'chosen' : ''}"><td class="l">${esc(nameOf(x.name))}${x.name === E.best.prob ? '<br><b>← 採用</b>' : ''}</td><td>${x.dev_ll.toFixed(3)}</td><td>${x.hold_ll.toFixed(3)}</td><td>${pct(x.hold_top1, 1)}</td></tr>`).join('');
-  const b = E.best;
   const seen = new Set();
   const top = (E.top || []).filter((c) => { const k = `${c.prob}|${c.gamma}|${c.hold.bets}|${c.hold.roi}`; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 8);
   const rows = top.map((c) => `<tr class="${c === E.top[0] ? 'chosen' : ''}"><td class="l">${esc(c.label.replace('2連単 ', ''))}<br><small>${esc(nameOf(c.prob))}${c.gamma !== 1 ? ` γ${c.gamma}` : ''}</small></td><td>${pct(c.dev.roi)}%</td><td>${pct(c.hold.roi)}%<br><small>±${pct(c.hold.se)}</small></td><td>${pct(c.hold.hit, 1)}%</td><td>${(c.hold.bets / Math.max(1, E.hold_days || 120)).toFixed(0)}</td></tr>`).join('');
-  const months = Object.entries(b.hold_months || {}).map(([m, v]) => `${+m.slice(5)}月 ${pct(v)}%`).join('・');
-  return `<h2>2連単（メイン）の買い方の比較（${esc(E.when || '')}）</h2>
-    <p class="explain">確率はオッズを混ぜない予想だけで出し、オッズは期待値の計算にだけ使います。2024年11月〜のデータで学習し、開発期間（${esc((E.dev || []).join('・'))}）で予想の混ぜ方と買い方を${(E.n || 0).toLocaleString()}通りから選び、本番テスト期間（${esc((E.hold || []).join('・'))}）で確かめました。</p>
-    <h3>確率の当たり具合（2連単）</h3>
-    <table class="rec-t"><thead><tr><th class="l">予想</th><th>開発<br>logloss</th><th>本番<br>logloss</th><th>本番<br>1点的中</th></tr></thead><tbody>${probRows}</tbody></table>
-    <p class="explain">logloss は小さいほど良い。確定オッズ（締切後にしか分からない）にはまだ少し届いていません。</p>
+  const months = Object.entries(E.best.hold_months || {}).map(([m, v]) => `${+m.slice(5)}月 ${pct(v)}%`).join('・');
+  return `<section class="score research"><h2>2連単の買い方の比較（${esc(E.when || '')}）</h2>
+    <p class="explain">開発 ${esc((E.dev || []).join('・'))} で選び、本番 ${esc((E.hold || []).join('・'))} で確認（確定オッズ）。</p>
+    <h3>確率の当たり具合</h3>
+    <table class="rec-t"><thead><tr><th class="l">予想</th><th>開発<br>logloss</th><th>本番<br>logloss</th><th>本番<br>本命的中</th></tr></thead><tbody>${probRows}</tbody></table>
     <h3>買い方</h3>
-    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="explain">採用した買い方の本番テストの月別回収率: ${months}。月によるぶれが大きく（±8%程度の誤差）、確定オッズで計算した成績なので、締切前のオッズで買う実際の成績は毎日の記録で確かめていきます。</p>`;
-}
-
-function renderResearch() {
-  const R = state.research;
-  if (!R) return '<div class="note">比較の結果はまだありません。</div>';
-  const pt = (R.prob_table || []).filter((x) => x.method !== 'market');
-  const best = R.chosen_prob;
-  const probRows = pt.map((x) => `<tr class="${x.method === best ? 'chosen' : ''}"><td class="l">${esc(x.label)}${x.method === best ? '<br><b>← 採用</b>' : ''}</td>
-    <td>${pct(x.hold_win_top1, 1)}</td><td>${pct(x.hold_tri_top1, 1)}</td><td>${pct(x.hold_tri_top5, 1)}</td><td>${pct(x.hold_trio_top1, 1)}</td></tr>`).join('');
-  const mk = (R.prob_table || []).find((x) => x.method === 'market');
-  const recs = (R.recommend || []).map((x) => `<tr><td class="l">${esc(x.title)}<br><small>${esc(x.label)}</small></td><td>${pct(x.dev.roi)}%</td><td>${pct(x.hold.roi)}%<br><small>±${pct(x.hold.se)}</small></td><td>${pct(x.hold.hit)}%</td><td>${(x.hold.bets / Math.max(1, (R.hold_days || 1))).toFixed(0)}</td></tr>`).join('');
-  const types = Object.values(R.best_by_type_top || {}).map((x) => `<tr><td class="l">${esc(x.label)}<br><small>${esc(x.method_label || x.method)}</small></td><td>${pct(x.dev.roi)}%</td><td>${pct(x.hold.roi)}%<br><small>±${pct(x.hold.se)}</small></td><td>${pct(x.hold.hit)}%</td><td>${(x.hold.bets / Math.max(1, (R.hold_days || 1))).toFixed(0)}</td></tr>`).join('');
-  return `<section class="score research">${renderExacta()}</section><section class="score research">
-    <h2>予想方法の比較（${esc(R.when || '')}・前の方法）</h2>
-    <p class="explain">${esc(R.rule || '')}</p>
-    <p class="explain">開発期間: ${esc((R.dev || []).join('・'))}／本番テスト期間: ${esc((R.hold || []).join('・'))}。下の数字は本番テスト期間の成績。</p>
-    <h3>確率の出し方</h3>
-    <table class="rec-t"><thead><tr><th class="l">方法</th><th>1着</th><th>3連単<br>本命</th><th>3連単<br>上位5点</th><th>3連複<br>本命</th></tr></thead><tbody>${probRows}</tbody></table>
-    ${mk ? `<p class="explain">参考: 確定オッズ（締切後にしか分からない）だけで予想すると 1着${pct(mk.hold_win_top1, 1)}%・3連単本命${pct(mk.hold_tri_top1, 1)}%。締切前のオッズが取れたレースは、予想にオッズを混ぜています。</p>` : ''}
-    <h3>おすすめの買い方</h3>
-    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${recs}</tbody></table>
-    <h3>券種ごとの一番良い買い方</h3>
-    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${types}</tbody></table>
-    ${renderEvResearch()}
-    <p class="explain">${(R.n_strategies || 0).toLocaleString()}通りの買い方を比べました。どの買い方も、安定して回収率100%を超えるものは見つかっていません（舟券は売上の約25%が差し引かれるため）。単勝・複勝などの確定オッズを見て選ぶと回収率が200%を超えるように見えますが、締切直前の大口買いでオッズが歪んだレースを後から選んでいるだけで、実際には買えないため除いています。</p>
-  </section>`;
-}
-
-function renderEvResearch() {
-  const E = state.ev;
-  if (!E) return '';
-  const sw = (E.exhibit_sweep || []).filter((x) => [0, 0.3, 0.5, 0.7, 0.85, 1].includes(x.w));
-  const ew = state.model && state.model.exhibit_w;
-  const sweep = sw.map((x) => `<tr class="${x.w === ew ? 'chosen' : ''}"><td class="l">${x.w === 0 ? '0（総合）' : x.w}${x.w === ew ? ' ← 展示最重視' : ''}</td><td>${(x.importance['展示航走'] * 100).toFixed(1)}</td><td>${(x.importance['選手の力'] * 100).toFixed(1)}</td><td>${(x.importance['近況'] * 100).toFixed(1)}</td><td>${pct(x.win_top1, 1)}</td><td>${pct(x.tri_top1, 1)}</td><td>${pct(x.tri_top5, 1)}</td></tr>`).join('');
-  const row = (x, name) => (x ? `<tr><td class="l">${name}<br><small>${esc(x.label)}${x.alpha < 1 ? `（予想${pct(x.alpha)}%＋オッズ）` : ''}</small></td><td>${pct(x.dev.roi)}%</td><td>${pct(x.hold.roi)}%<br><small>±${pct(x.hold.se)}</small></td><td>${pct(x.hold.hit, 1)}%</td><td>${(x.hold.bets / Math.max(1, (E.hold_days || 120))).toFixed(0)}</td></tr>` : '');
-  const ws = Object.keys(E.by_w || {});
-  const evRows = ws.map((w) => { const b = E.by_w[w]; const nm = w === '0' ? '総合' : '展示最重視'; return row(b.trifecta, `3連単・${nm}`) + row(b.exacta, `2連単・${nm}`); }).join('');
-  return `<h3>展示航走の重さ<small>展開モデル＋（枠＋展示航走のモデル）を混ぜる割合</small></h3>
-    ${sweep ? `<table class="rec-t"><thead><tr><th class="l">展示の割合</th><th>効き<br>展示</th><th>効き<br>選手</th><th>効き<br>近況</th><th>1着</th><th>3連単<br>本命</th><th>3連単<br>上位5</th></tr></thead><tbody>${sweep}</tbody></table>
-    <p class="explain">効き＝その材料をレース内で平均にならしたときに、3連単の予想がどれだけ悪くなるか（大きいほど予想を左右している）。枠（コース）はどの割合でも残しています。展示の割合を0.85にすると、枠以外では展示航走がいちばん効く材料になりますが、的中率は総合より下がります。</p>` : ''}
-    <h3>期待値の買い方（3連単・2連単）</h3>
-    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${evRows}</tbody></table>
-    <p class="explain">開発期間（${esc((E.dev || []).join('・'))}）で一番良かった決め方を、本番テスト期間（${esc((E.hold || []).join('・'))}）で確かめた結果。オッズは確定オッズで計算しているため、締切前のオッズで買う実際の成績はこれより少しぶれます。</p>`;
+    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の<br>点数</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="explain">採用した買い方の月別: ${months}</p></section>`;
 }
 
 function render() {
@@ -580,7 +478,7 @@ function render() {
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
   if (state.view === 'done') html += renderScore(rs) + renderRecord();
-  if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。「答え合わせ」で結果を見られます。' : 'まだ終わったレースはありません。'}</div>`;
+  if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;
   renderFooter();
@@ -589,20 +487,9 @@ function render() {
 function renderFooter() {
   const m = state.model;
   if (!m) return;
-  const v = (m.valid && m.valid.full) || {};
-  const ev = m.evaluation || {};
   const lines = [];
-  const n = (v.n_train_races || 0) + (v.n_valid_races || 0);
-  lines.push(`予想モデル: ${m.trained_until || '-'} までの約${n ? (n / 10000).toFixed(1) : '-'}万レースで学習。${m.mix ? '展開モデル（誰がどの決まり手で勝つか→その展開で2着→3着を、選手の組み合わせから予想）に、枠と展示航走だけのモデルを少し混ぜています。オッズは混ぜていません。' : ''}（スタート展示・展示タイム・チルト・部品交換・気象・選手とモーターの近況を使用）`);
-  const exh = m.evaluation_compare && (m.evaluation_compare.exhibit || null);
-  const one = (e) => `1着の的中 ${pct(e.top1, 1)}%、2連単 本命の的中 ${pct(e.exacta['1'].hit, 1)}%、3連単 本命の的中 ${pct(e.trifecta['1'].hit, 1)}%・上位5点 ${pct(e.trifecta['5'].hit, 1)}%`;
-  if (ev.top1) {
-    lines.push(`学習に使っていないレースでの検証（${ev.period ? `${ev.period[0]}〜${ev.period[1]}` : ''}、${ev.races.toLocaleString()}レース、ページと同じ計算・オッズは混ぜない）:`);
-    lines.push(`${m.mix ? '回収率重視: ' : ''}${one(ev)}。`);
-    if (exh) lines.push(`展示最重視: ${one(exh)}。`);
-  }
-  if (m.bet) lines.push(`2連単の買い方: ${esc(m.bet.label)}（本番テスト ${esc((m.bet.hold_period || []).join('・'))} で回収${pct(m.bet.hold.roi)}%±${pct(m.bet.hold.se)}、確定オッズで計算）。`);
-  lines.push('データ: Boatrace Open API（非公式・約10分おき更新）と、公式サイトから自動で取った直前情報。予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。');
+  lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。${m.bet ? `2連単の買い方: ${esc(ruleText(m.bet.rule))}（検証 回収${pct(m.bet.hold.roi)}%）` : ''}`);
+  lines.push('予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。');
   $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
 }
 

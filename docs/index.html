@@ -212,7 +212,10 @@ table.ev th { font-weight: 500; color: var(--muted); font-size: 11px; text-align
 table.ev { border-collapse: collapse; margin: 4px 0; font-size: 13.5px; }
 table.ev td { padding: 3px 12px 3px 0; font-family: var(--num); font-variant-numeric: tabular-nums; }
 table.ev td.good { color: var(--ok); font-weight: 700; }
-.ev-sum { font-size: 13px; line-height: 1.7; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.ev-sum { font-size: 13px; line-height: 1.7; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; margin-top: 4px; }
+.ev-sum .good { color: var(--ok); }
+.big-bet { font-size: 22px; letter-spacing: 0.04em; }
+div.rec .rule { font-size: 11px; color: var(--faint); margin-top: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 @media (min-width: 560px) { .boat { grid-template-columns: 34px 1fr 120px; } }
