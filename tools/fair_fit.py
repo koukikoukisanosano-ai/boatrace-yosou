@@ -18,7 +18,15 @@ from research import fit_gbm, normalize_place, tri_iter  # noqa: E402
 from research_exacta import load, log  # noqa: E402
 from tenkai import COURSE, EXHIBIT, clf, pair_feats, pair_rows, race_tensor, scenario_probs, tri_tenkai, winner_class  # noqa: E402
 
-VARIANTS = {"tenkai": (300, 0.08, 15), "tenkai_big": (600, 0.05, 31)}
+# 名前: (木の本数, 学習率, 葉の数, 新しい日を重く見る半減期[日] or None)
+VARIANTS = {"tenkai": (300, 0.08, 15, None), "tenkai_big": (600, 0.05, 31, None),
+            "tenkai_xl": (1000, 0.03, 31, None), "tenkai_rw": (600, 0.05, 31, 180)}
+
+
+def recency(dates, end, half):
+    import pandas as pd
+    age = (pd.Timestamp(end) - pd.to_datetime(dates)).dt.days.to_numpy()
+    return 0.5 ** (age / half)
 
 
 def main():
@@ -27,6 +35,7 @@ def main():
     ap.add_argument("--month", required=True)
     ap.add_argument("--train-from", default="2024-11-01")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--variants", default="", help="展開モデルの種類（空なら全部）")
     a = ap.parse_args()
     df, feats = load(Path(a.work))
     df = df[df.date >= a.train_from]
@@ -38,11 +47,17 @@ def main():
     ids, present, place, X = race_tensor(tef, feats)
     R = len(ids)
     out = {"month": a.month, "ids": ids, "present": present, "place": place}
-    for name, (n, lr, leaves) in VARIANTS.items():
+    import pandas as pd
+    for name, (n, lr, leaves, half) in VARIANTS.items():
+        if a.variants and name not in a.variants.split(","):
+            continue
         mk = lambda: clf(n, lr, leaves)  # noqa: E731
-        Sm = mk().fit(trf[feats].to_numpy(float), winner_class(trf))
-        r2 = pair_rows(trf, feats, 2); N2 = mk().fit(r2[pair_feats(feats, 2)].to_numpy(float), r2.y); del r2
-        r3 = pair_rows(trf, feats, 3); N3 = mk().fit(r3[pair_feats(feats, 3)].to_numpy(float), r3.y); del r3
+        w = (lambda d: recency(d, f"{a.month}-01", half)) if half else (lambda d: None)
+        Sm = mk().fit(trf[feats].to_numpy(float), winner_class(trf), sample_weight=w(trf.date))
+        r2 = pair_rows(trf, feats, 2)
+        N2 = mk().fit(r2[pair_feats(feats, 2)].to_numpy(float), r2.y, sample_weight=w(pd.to_datetime(r2.race.str[:8]).dt.strftime("%Y-%m-%d"))); del r2
+        r3 = pair_rows(trf, feats, 3)
+        N3 = mk().fit(r3[pair_feats(feats, 3)].to_numpy(float), r3.y, sample_weight=w(pd.to_datetime(r3.race.str[:8]).dt.strftime("%Y-%m-%d"))); del r3
         out[name], _, _ = tri_tenkai(scenario_probs(Sm, X, present), N2, N3, X, present, feats)
         log(f"  展開モデル {name}")
     cef = [f for f in COURSE + EXHIBIT if f in feats]
@@ -56,8 +71,9 @@ def main():
     pg = {k: m.predict_proba(Xf)[:, 1].reshape(R, 6) for k, m in models.items()}
     out["gbm"] = tri_iter(*normalize_place(pg["win"], pg["top2"], pg["top3"], present), present)
     log("  機械学習")
-    for k in ("tenkai", "tenkai_big", "ce", "gbm"):
-        out[k] = out[k].astype(np.float32)
+    for k in list(out):
+        if k not in ("month", "ids", "present", "place"):
+            out[k] = out[k].astype(np.float32)
     pickle.dump(out, open(a.out, "wb"))
     log("保存", a.out)
 

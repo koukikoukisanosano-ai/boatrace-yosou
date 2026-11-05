@@ -30,6 +30,12 @@ COMBOS = {
     "展開（大きめ）＋展示0.15": {"tenkai_big": 0.85, "ce": 0.15},
     "展開（大きめ）＋機械学習0.25": {"tenkai_big": 0.75, "gbm": 0.25},
     "展開＋機械学習": {"tenkai_big": 0.5, "gbm": 0.5},
+    "展開モデル（特大）": {"tenkai_xl": 1.0},
+    "展開モデル（新しい日重視）": {"tenkai_rw": 1.0},
+    "展開（特大）＋展示0.15": {"tenkai_xl": 0.85, "ce": 0.15},
+    "展開（新しい日重視）＋展示0.15": {"tenkai_rw": 0.85, "ce": 0.15},
+    "展開3種＋展示0.15": {"tenkai_big": 0.85 / 3, "tenkai_xl": 0.85 / 3, "tenkai_rw": 0.85 / 3, "ce": 0.15},
+    "展開（大きめ＋新しい日重視）＋展示0.15": {"tenkai_big": 0.425, "tenkai_rw": 0.425, "ce": 0.15},
 }
 EV_T = [1.0, 1.1, 1.2, 1.3, 1.5, 1.75, 2.0]
 MINP = [0.0, 0.02, 0.04, 0.07, 0.1]
@@ -86,8 +92,9 @@ def main():
         r = json.loads(ln)
         if r["id"] in need:
             races[r["id"]] = r
+    combos = {cn: mix for cn, mix in COMBOS.items() if all(k in M[0] for k in mix)}
     rules = rule_list()
-    cands = [(cn, i) for cn in COMBOS for i in range(len(rules))]
+    cands = [(cn, i) for cn in combos for i in range(len(rules))]
     stats = np.zeros((len(cands), len(M), 3))        # 点数・払戻合計・払戻の2乗合計（100円あたり）
     D = []
     for mi, b in enumerate(M):
@@ -95,10 +102,10 @@ def main():
         eo = odds_matrix(ids, load_odds(sorted({f"{i[:4]}-{i[4:6]}-{i[6:8]}" for i in ids})), "exacta")
         pay = payout_matrix(ids, races, "exacta") / 100
         has = np.isfinite(eo).sum(1) >= 20
-        probs = {cn: bet_probs(geo([b[k].astype(float) for k in mix], list(mix.values())))["exacta"] for cn, mix in COMBOS.items()}
+        probs = {cn: bet_probs(geo([b[k].astype(float) for k in mix], list(mix.values())))["exacta"] for cn, mix in combos.items()}
         D.append({"eo": eo, "pay": pay, "has": has, "probs": probs, "days": np.array([str(i)[:8] for i in ids])})
         ci = 0
-        for cn in COMBOS:
+        for cn in combos:
             for m in masks(probs[cn], eo, has, rules):
                 x = pay[m]
                 stats[ci, mi] = (m.sum(), x.sum(), (x ** 2).sum())
@@ -143,7 +150,31 @@ def main():
         xx = d["pay"][mask]
         ref.append({"month": m, "bets": int(mask.sum()), "roi": round(float(xx.mean()), 4) if len(xx) else None})
     log("参考（今の買い方を全部の月に）:", ref)
-    out = {"months": results, "total": total, "reference_current_rule": ref, "first_test": a.first_test,
+    # 次の月に使う買い方: 全部の月の成績で選ぶ（公平な検証と同じ選び方）
+    n, s_, s2 = stats[:, :, 0].sum(1), stats[:, :, 1].sum(1), stats[:, :, 2].sum(1)
+    roi = np.where(n > 0, s_ / np.maximum(n, 1), 0)
+    se = np.sqrt(np.maximum(s2 / np.maximum(n, 1) - roi ** 2, 0) / np.maximum(n, 1))
+    lb = np.where(n >= a.min_bets_per_month * len(M), roi - se, -9)
+    bi = int(np.argmax(lb)); cn, ri = cands[bi]
+    nxt = {"prob": cn, "mix": combos[cn], "rule": rules[ri], "label": label(rules[ri]), "bets": int(n[bi]), "roi": round(float(roi[bi]), 4), "se": round(float(se[bi]), 4)}
+    log("次の月に使う買い方:", json.dumps(nxt, ensure_ascii=False))
+    # 予想の混ぜ方ごとの公平な成績（その月より前で買い方を選んだ場合）
+    by_prob = {}
+    for cn in combos:
+        idx = [i for i, c in enumerate(cands) if c[0] == cn]
+        xs = []
+        for mi, m in enumerate(months):
+            if m < a.first_test:
+                continue
+            nn, ss, ss2 = stats[idx, :mi, 0].sum(1), stats[idx, :mi, 1].sum(1), stats[idx, :mi, 2].sum(1)
+            rr = np.where(nn > 0, ss / np.maximum(nn, 1), 0)
+            ee = np.sqrt(np.maximum(ss2 / np.maximum(nn, 1) - rr ** 2, 0) / np.maximum(nn, 1))
+            j = idx[int(np.argmax(np.where(nn >= a.min_bets_per_month * mi, rr - ee, -9)))]
+            xs.append(stats[j, mi])
+        xs = np.array(xs); tb = xs[:, 0].sum()
+        by_prob[cn] = {"bets": int(tb), "roi": round(float(xs[:, 1].sum() / max(tb, 1)), 4)}
+    log("混ぜ方ごと（公平）:", json.dumps(by_prob, ensure_ascii=False))
+    out = {"next": nxt, "by_prob": by_prob, "months": results, "total": total, "reference_current_rule": ref, "first_test": a.first_test,
            "daily": [[dd, int(len(bd[dd])), round(float(bd[dd].sum()), 2)] for dd in ud]}
     Path(a.out).write_text(json.dumps(out, ensure_ascii=False))
 
