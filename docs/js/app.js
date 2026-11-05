@@ -129,7 +129,6 @@ async function refresh(full = false) {
     await loadModel();
     if (full || !state.snap) { await loadSnapshot(state.date); predKey.clear(); }
     if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
-    if (!state.sim) { try { state.sim = (await getJSON('data/sim.json', 'no-cache')).json; } catch (e) { state.sim = null; } }
     if (!state.exa) { try { state.exa = (await getJSON('data/research_exacta.json', 'no-cache')).json; } catch (e) { state.exa = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
     mergeLive(races, live);
@@ -455,10 +454,11 @@ function renderRecord() {
 }
 
 // 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1点＝残高の1/200、100円単位、上限3,000円）
+const SIM_FROM = '2026-11-06';
 function simulate(start) {
   const pts = []; let bank = start; let peak = start; let dd = 0; let bets = 0; let cost = 0; let ret = 0; let last = '';
   const push = (d, seg) => { if (d !== last) { pts.push({ d, bank, seg }); last = d; } else pts[pts.length - 1].bank = bank; };
-  pts.push({ d: '', bank, seg: 1 });
+  pts.push({ d: '', bank, seg: 2 });
   const step = (n, payPer100, d, seg) => {
     const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
     if (st < 100) return;
@@ -467,10 +467,9 @@ function simulate(start) {
     peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
     push(d, seg);
   };
-  // 選ぶのに使った期間（開発）は成績が良く出るので含めない。確かめた期間（本番テスト）から始める
-  for (const [d, seg, , pay] of (state.sim && state.sim.bets) || []) if (seg === 1) step(1, pay, d, seg);
-  const days = ((state.report && state.report.days) || []).filter((x) => x.rec && x.rec[REC_KEY]);
-  const lastSim = pts.length > 1 ? pts[pts.length - 1].d : '';
+  // 実際の記録（締切前のオッズで選んだ買い目）だけ。SIM_FROM の日から
+  const days = ((state.report && state.report.days) || []).filter((x) => x.rec && x.rec[REC_KEY] && x.date >= SIM_FROM);
+  const lastSim = '';
   for (const x of days) {
     const d = x.date.replace(/-/g, '');
     if (d <= lastSim) continue;
@@ -486,10 +485,9 @@ function simulate(start) {
   return { pts, bank, dd, bets, roi: cost ? ret / cost : 0 };
 }
 function renderSim() {
-  if (!state.sim) return '';
   const start = state.bank;
   const S = simulate(start);
-  if (S.pts.length < 3) return '';
+  if (S.pts.length < 3) return `<section class="score"><h2>損益（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2><div class="k">${S.pts.length === 2 ? `1日目 ${S.bank - start >= 0 ? '+' : ''}${yen(S.bank - start)}（${S.bets}点）` : '毎朝、前日の分を記録します'}</div></section>`;
   const W = 340, H = 170, L = 4, T = 8, B = 18;
   const vals = S.pts.map((p) => p.bank);
   const lo = Math.min(start, ...vals), hi = Math.max(start, ...vals);
@@ -503,14 +501,14 @@ function renderSim() {
   const lab = (i) => { const d = S.pts[i].d; return d ? `${+d.slice(4, 6)}/${+d.slice(6, 8)}` : ''; };
   const xt = [1, Math.floor(S.pts.length / 2), S.pts.length - 1].map((i) => `<text x="${x(i).toFixed(1)}" y="${H - 4}" text-anchor="${i === 1 ? 'start' : i === S.pts.length - 1 ? 'end' : 'middle'}">${lab(i)}</text>`).join('');
   const gain = S.bank - start;
-  return `<section class="score"><h2>仮想の損益（入金${yen(start)}から機械的に買い続けた場合）</h2>
+  return `<section class="score"><h2>損益（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>
     <div class="grid">
       <div><div class="k">残高</div><div class="v">${Math.round(S.bank / 1000).toLocaleString()}<small>千円</small></div><div class="k">${gain >= 0 ? '+' : ''}${yen(gain)}</div></div>
       <div><div class="k">回収率（${S.bets.toLocaleString()}点）</div><div class="v">${pct(S.roi)}<small>%</small></div></div>
       <div><div class="k">最大の落ち込み</div><div class="v">${Math.round(S.dd / 1000).toLocaleString()}<small>千円</small></div></div>
     </div>
     <svg class="sim" viewBox="0 0 ${W} ${H}" role="img" aria-label="残高の推移"><line class="base" x1="${L}" x2="${W - L}" y1="${y(start).toFixed(1)}" y2="${y(start).toFixed(1)}"/>${lines}${xt}</svg>
-    <div class="legend"><span class="sim-hold">検証 ${+(state.sim.hold || ['0-1'])[0].slice(5)}〜${+(state.sim.hold || ['0-1']).slice(-1)[0].slice(5)}月（確定オッズ）</span><span class="sim-live">実際の記録（締切前オッズ）</span></div>
+
   </section>`;
 }
 
