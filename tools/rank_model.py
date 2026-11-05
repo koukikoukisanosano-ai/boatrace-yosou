@@ -79,3 +79,32 @@ def race_tri(s1, s2, present):
         tri[:, k] = p1[:, a] * p2[:, a, b] * p3
     tri *= present[:, [p[0] for p in perms]] & present[:, [p[1] for p in perms]] & present[:, [p[2] for p in perms]]
     return tri / np.maximum(tri.sum(1, keepdims=True), 1e-12)
+
+
+class LgbSoftmax:
+    """同じことを LightGBM（自作の目的関数）で速く。GitHub の計算機用（pip install lightgbm）"""
+
+    def __init__(self, rounds=600, lr=0.05, leaves=31, min_leaf=40, l2=1.0, log=None):
+        self.p = dict(learning_rate=lr, num_leaves=leaves, min_data_in_leaf=min_leaf, lambda_l2=l2, verbose=-1, num_threads=0,
+                      feature_fraction=0.9, bagging_fraction=1.0, max_bin=255)
+        self.rounds, self.log = rounds, log
+
+    def fit(self, X, gid, y):
+        import lightgbm as lgb
+        G = int(gid.max()) + 1
+
+        def obj(preds, data):
+            p = _group_softmax(preds, gid, G)
+            return p - y, np.maximum(p * (1 - p), 1e-6)
+
+        ds = lgb.Dataset(X, label=y, free_raw_data=False)
+        t0 = time.time()
+        self.b = lgb.train({**self.p, "objective": obj}, ds, num_boost_round=self.rounds)
+        if self.log:
+            s = self.b.predict(X, raw_score=True)
+            p = _group_softmax(s, gid, G)
+            self.log(f"    学習 logloss {-np.log(np.maximum(p[y == 1], 1e-12)).mean():.4f}（{time.time() - t0:.0f}秒）")
+        return self
+
+    def score(self, X):
+        return self.b.predict(X, raw_score=True)

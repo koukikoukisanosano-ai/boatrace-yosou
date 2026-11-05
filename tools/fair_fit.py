@@ -25,9 +25,14 @@ EXTRA = {"tenkai_xl": (1000, 0.03, 31, None), "tenkai_rw": (600, 0.05, 31, 180),
          "tenkai_l63": (600, 0.05, 63, None), "tenkai_slow": (1500, 0.02, 31, None)}
 
 
-def fit_rank(trf, X, present, feats, rounds=400, lr=0.1, leaves=31):
+def fit_rank(trf, X, present, feats, rounds=600, lr=0.05, leaves=31):
     """6艇を比べて学ぶモデル（rank_model.py）で 3連単の確率を出す"""
-    from rank_model import SoftmaxBoost, race_tri
+    from rank_model import race_tri
+    try:
+        import lightgbm  # noqa: F401
+        from rank_model import LgbSoftmax as SoftmaxBoost
+    except ImportError:
+        from rank_model import SoftmaxBoost
     d = trf[trf.race.isin(trf[trf.place == 1].groupby("race").size().pipe(lambda x: x[x == 1]).index)]
     gid = d.race.astype("category").cat.codes.to_numpy()
     m1 = SoftmaxBoost(rounds, lr, leaves, log=log).fit(d[feats].to_numpy(float), gid, (d.place == 1).to_numpy(float))
@@ -74,6 +79,9 @@ def main():
     ids, present, place, X = race_tensor(tef, feats)
     R = len(ids)
     out = {"month": a.month, "ids": ids, "present": present, "place": place}
+    if a.variants and "rank" in a.variants.split(","):
+        out["rank"] = fit_rank(trf, X, present, feats)
+        log("  順位づけモデル")
     import pandas as pd
     for name, (n, lr, leaves, half) in {**VARIANTS, **EXTRA}.items():
         if name in EXTRA and name not in a.variants.split(","):   # 本番と同じもの（VARIANTS）はいつも作る。試しのものは指定したときだけ
@@ -87,9 +95,6 @@ def main():
         N3 = mk().fit(r3[pair_feats(feats, 3)].to_numpy(float), r3.y, sample_weight=w(pd.to_datetime(r3.race.str[:8]).dt.strftime("%Y-%m-%d"))); del r3
         out[name], _, _ = tri_tenkai(scenario_probs(Sm, X, present), N2, N3, X, present, feats)
         log(f"  展開モデル {name}")
-    if a.variants and "rank" in a.variants.split(","):
-        out["rank"] = fit_rank(trf, X, present, feats)
-        log("  順位づけモデル")
     cef = [f for f in COURSE + EXHIBIT if f in feats]
     Xc = X[:, :, [feats.index(f) for f in cef]].reshape(R * 6, -1)
     p = {k: clf().fit(trf[cef].to_numpy(float), (trf.place <= m).astype(int)).predict_proba(Xc)[:, 1].reshape(R, 6)
