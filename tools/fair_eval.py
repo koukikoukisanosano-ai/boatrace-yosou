@@ -155,6 +155,14 @@ def main():
         xx = d["pay"][mask]
         ref.append({"month": m, "bets": int(mask.sum()), "roi": round(float(xx.mean()), 4) if len(xx) else None})
     log("参考（今の買い方を全部の月に）:", ref)
+    for fr in (dict(t=1.5, minp=0.07, maxo=30.0, mino=10.0, k=1, edge=1.0), dict(t=1.75, minp=0.04, maxo=60.0, mino=10.0, k=1, edge=1.0),
+               dict(t=1.3, minp=0.07, maxo=60.0, mino=0.0, k=1, edge=1.0)):
+        tb, tr_ = 0, 0.0; mon = []
+        for mi, m in enumerate(months):
+            d = D[mi]
+            mask = next(masks(d["probs"][fixed["prob"]], d["eo"], d["has"], [fr]))
+            xx = d["pay"][mask]; tb += len(xx); tr_ += xx.sum(); mon.append(round(float(xx.mean()), 2) if len(xx) else None)
+        log(f"参考 {label(fr)}: 合計 {tr_ / max(tb, 1):.3f}（{tb}点） 月別 {mon}")
     # 次の月に使う買い方: 全部の月の成績で選ぶ（公平な検証と同じ選び方）
     n, s_, s2 = stats[:, :, 0].sum(1), stats[:, :, 1].sum(1), stats[:, :, 2].sum(1)
     roi = np.where(n > 0, s_ / np.maximum(n, 1), 0)
