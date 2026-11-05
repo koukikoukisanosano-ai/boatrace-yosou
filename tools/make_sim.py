@@ -49,7 +49,7 @@ def main():
         inv = np.where(np.isfinite(o), 1 / o, 0); mkt = inv / np.maximum(inv.sum(1, keepdims=True), 1e-12)
         rank = np.argsort(np.argsort(-ev, 1), 1)
         m = (np.isfinite(eo).sum(1) >= 20)[:, None] & np.isfinite(o) & (ev >= rule["t"]) & (e >= rule["minp"]) & \
-            (np.nan_to_num(o, nan=1e9) <= rule["maxo"]) & (rank < rule["k"]) & (e / np.maximum(mkt, 1e-12) >= rule.get("edge", 1))
+            (np.nan_to_num(o, nan=1e9) <= rule["maxo"]) & (np.nan_to_num(o, nan=0) > rule.get("mino", 0)) & (rank < rule["k"]) & (e / np.maximum(mkt, 1e-12) >= rule.get("edge", 1))
         for r, c in zip(*np.nonzero(m)):
             rows.append([str(ids[r])[:8], si, round(float(o[r, c]), 1), round(float(pay[r, c]) / 100, 2), str(ids[r])])
     rows.sort(key=lambda x: x[4])

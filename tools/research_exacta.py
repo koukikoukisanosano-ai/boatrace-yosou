@@ -130,6 +130,7 @@ EV_T = [1.0, 1.1, 1.2, 1.3, 1.5, 1.75, 2.0]
 MINP = [0.0, 0.02, 0.04, 0.07, 0.1]
 MAXO = [15.0, 30.0, 60.0, 100.0]
 MAXK = [1, 2, 3, 5]
+MINO = 10.0                  # これ以下のオッズは買わない（人気の組は市場の値付けが正確で、開発・本番とも回収率が低かった）
 EDGE = [1.0, 1.2, 1.4]       # 予想の確率 ÷ 市場の確率（オッズの逆数） の下限
 
 
@@ -144,7 +145,8 @@ def rules(prob, odds, valid):
     for t, mp, mo, k, ed in itertools.product(EV_T, MINP, MAXO, MAXK, EDGE):
         if ed > 1.0 and t > 1.2:
             continue
-        yield {"t": t, "minp": mp, "maxo": mo, "k": k, "edge": ed}, base & (ev >= t) & (prob >= mp) & (np.nan_to_num(o, nan=1e9) <= mo) & (rank < k) & (edge >= ed)
+        yield ({"t": t, "minp": mp, "maxo": mo, "mino": MINO, "k": k, "edge": ed},
+               base & (ev >= t) & (prob >= mp) & (np.nan_to_num(o, nan=1e9) <= mo) & (np.nan_to_num(o, nan=0) > MINO) & (rank < k) & (edge >= ed))
 
 
 def label(r):
@@ -153,7 +155,8 @@ def label(r):
         s += f"・確率{r['minp'] * 100:g}%以上"
     if r.get("edge", 1) > 1:
         s += f"・市場の{r['edge']}倍以上の確率"
-    return s + f"・{int(r['maxo'])}倍以下・1レース{r['k']}点まで"
+    lo = f"{r['mino']:g}倍超〜" if r.get("mino") else ""
+    return s + f"・{lo}{int(r['maxo'])}倍・1レース{r['k']}点まで"
 
 
 def cmd_eval(a):

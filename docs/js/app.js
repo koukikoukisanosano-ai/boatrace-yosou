@@ -365,7 +365,7 @@ function exactaPicks(r, pr) {
   return { state: res.picks.length ? 'buy' : 'pass', ...res };
 }
 function ruleText(rule) {
-  return `期待値${rule.t}以上${rule.minp ? `・確率${pct(rule.minp)}%以上` : ''}${rule.edge > 1 ? `・市場の${rule.edge}倍以上` : ''}・${rule.maxo}倍以下・${rule.k}点`;
+  return `期待値${rule.t}以上${rule.minp ? `・確率${pct(rule.minp)}%以上` : ''}${rule.edge > 1 ? `・市場の${rule.edge}倍以上` : ''}・${rule.mino ? `${rule.mino}倍超〜` : ''}${rule.maxo}倍${rule.mino ? '' : '以下'}・${rule.k}点`;
 }
 function evHtml(r, pr) {
   if (r.preview === 'none' || !pr.base) return '';
@@ -382,7 +382,7 @@ function evHtml(r, pr) {
     body = '<div class="ev-sum"><b>見送り</b></div>';
   } else {
     const list = pr.exacta.filter((p) => p.p >= (rule.minp || 0)).slice(0, 3);
-    body = `<div class="ev-sum">オッズ待ち　${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, 1).toFixed(1)}</b>倍以上で買い`).join('　')}</div>`;
+    body = `<div class="ev-sum">オッズ待ち　${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, (rule.mino || 0) + 0.1, 1).toFixed(1)}</b>倍以上で買い`).join('　')}</div>`;
   }
   return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>`;
 }
