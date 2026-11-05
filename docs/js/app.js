@@ -10,7 +10,7 @@ const MARKS = ['◎', '○', '▲', '△'];
 const state = {
   date: jstToday(), model: null, snap: null, snapNote: '', races: [], preds: new Map(),
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
-  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null,
+  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null,
   mode: loadPref('mode2', 'roi'),
   bank: +loadPref('bank', '20000') || 20000,
 };
@@ -20,7 +20,9 @@ function savePref(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 保
 // 予想の重み: 回収率重視（2連単の買い目を選ぶのと同じ予想）/ 展示最重視（枠＋展示航走のモデルを強く混ぜる）
 // 1点の購入額: 資金の1/200（過去の検証で一番大きかった連敗の落ち込み 約170点分に耐える額）を100円単位、上限3,000円
 const MAX_STAKE = 3000;
-const stake = () => Math.min(MAX_STAKE, Math.max(100, Math.floor(state.bank / 200 / 100) * 100));
+const stake = () => Math.min(MAX_STAKE, Math.max(100, Math.floor(state.bank / 200 / 100) * 100));   // 1レースの購入額
+const perPoint = (n) => Math.max(100, Math.floor(stake() / n / 100) * 100);                          // 何点か買うときの1点の額
+const buyText = (n) => (n > 1 ? `各${yen(perPoint(n))}×${n}点` : yen(stake()));
 const yen = (v) => `${Math.round(v).toLocaleString()}円`;
 const exhibitW = () => (state.mode === 'exhibit' ? (state.model && state.model.exhibit_w) || 0.85 : 0);
 
@@ -127,6 +129,7 @@ async function refresh(full = false) {
     await loadModel();
     if (full || !state.snap) { await loadSnapshot(state.date); predKey.clear(); }
     if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
+    if (!state.sim) { try { state.sim = (await getJSON('data/sim.json', 'no-cache')).json; } catch (e) { state.sim = null; } }
     if (!state.exa) { try { state.exa = (await getJSON('data/research_exacta.json', 'no-cache')).json; } catch (e) { state.exa = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
     mergeLive(races, live);
@@ -242,7 +245,7 @@ function raceRow(r) {
     const t = pr.exacta[0];
     const xb = exactaPicks(r, pr);
     const br = betResult(r, xb);
-    const betTag = xb.state === 'buy' ? `<span class="bet buy">買い ${formation(xb.picks.map((p) => p.combo)).join(' ')} ${yen(stake() * xb.picks.length)}</span>${br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 +${yen(br.amount * stake() / 100 - stake() * xb.picks.length)}` : '外れ'}</span>` : ''}`
+    const betTag = xb.state === 'buy' ? `<span class="bet buy">買い ${formation(xb.picks.map((p) => p.combo)).join(' ')} ${buyText(xb.picks.length)}</span>${br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 +${yen(br.amount * perPoint(xb.picks.length) / 100 - perPoint(xb.picks.length) * xb.picks.length)}` : '外れ'}</span>` : ''}`
       : xb.state === 'pass' ? '<span class="bet pass">見送り</span>' : '';
     const pv = r.preview === 'none' ? '<span class="pv none">展示前</span>' : '';
     picks = `<span class="picks"><span class="marks">${marks}</span><span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${betTag}${pv}</span>`;
@@ -373,8 +376,8 @@ function evHtml(r, pr) {
   if (x.state === 'buy') {
     const combos = x.picks.map((p) => p.combo);
     const br = betResult(r, x);
-    const hit = br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 払戻${yen(br.amount * stake() / 100)}` : '外れ'}</span>` : '';
-    body = `<div class="ev-sum"><b class="num big-bet">${formation(combos).join('　')}</b><b class="num big-bet">${yen(stake() * combos.length)}</b>${x.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値 <b class="good">${p.ev.toFixed(2)}</b></span>`).join('')} ${hit}</div>`;
+    const hit = br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 払戻${yen(br.amount * perPoint(combos.length) / 100)}` : '外れ'}</span>` : '';
+    body = `<div class="ev-sum"><b class="num big-bet">${formation(combos).join('　')}</b><b class="num big-bet">${buyText(combos.length)}</b>${x.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値 <b class="good">${p.ev.toFixed(2)}</b></span>`).join('')} ${hit}</div>`;
   } else if (x.state === 'pass') {
     body = '<div class="ev-sum"><b>見送り</b></div>';
   } else {
@@ -451,6 +454,66 @@ function renderRecord() {
     <table class="rec"><thead><tr><th>日付</th><th>買い目</th><th>的中</th><th>回収</th><th>本命的中</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
+// 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1点＝残高の1/200、100円単位、上限3,000円）
+function simulate(start) {
+  const pts = []; let bank = start; let peak = start; let dd = 0; let bets = 0; let cost = 0; let ret = 0; let last = '';
+  const push = (d, seg) => { if (d !== last) { pts.push({ d, bank, seg }); last = d; } else pts[pts.length - 1].bank = bank; };
+  pts.push({ d: '', bank, seg: 1 });
+  const step = (n, payPer100, d, seg) => {
+    const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
+    if (st < 100) return;
+    for (let i = 0; i < n; i++) { bank -= st; cost += st; bets++; }
+    bank += st * payPer100; ret += st * payPer100;
+    peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
+    push(d, seg);
+  };
+  // 選ぶのに使った期間（開発）は成績が良く出るので含めない。確かめた期間（本番テスト）から始める
+  for (const [d, seg, , pay] of (state.sim && state.sim.bets) || []) if (seg === 1) step(1, pay, d, seg);
+  const days = ((state.report && state.report.days) || []).filter((x) => x.rec && x.rec[REC_KEY]);
+  const lastSim = pts.length > 1 ? pts[pts.length - 1].d : '';
+  for (const x of days) {
+    const d = x.date.replace(/-/g, '');
+    if (d <= lastSim) continue;
+    const r = x.rec[REC_KEY];
+    if (!r.bets) continue;
+    // 1日分をまとめて: 点数ぶん買って、払戻の合計（100円あたり）
+    const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
+    if (st < 100) break;
+    bank += st * (r.ret / 100 - r.bets); cost += st * r.bets; ret += st * r.ret / 100; bets += r.bets;
+    peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
+    push(d, 2);
+  }
+  return { pts, bank, dd, bets, roi: cost ? ret / cost : 0 };
+}
+function renderSim() {
+  if (!state.sim) return '';
+  const start = state.bank;
+  const S = simulate(start);
+  if (S.pts.length < 3) return '';
+  const W = 340, H = 170, L = 4, T = 8, B = 18;
+  const vals = S.pts.map((p) => p.bank);
+  const lo = Math.min(start, ...vals), hi = Math.max(start, ...vals);
+  const x = (i) => L + (W - L * 2) * i / (S.pts.length - 1);
+  const y = (v) => T + (H - T - B) * (1 - (v - lo) / Math.max(hi - lo, 1));
+  const segs = [[], [], []];
+  for (let i = 1; i < S.pts.length; i++) { const k = S.pts[i].seg; if (!segs[k].length) segs[k].push(i - 1); segs[k].push(i); }
+  segs.forEach((a, k) => { segs[k] = a.map((i) => `${x(i).toFixed(1)},${y(S.pts[i].bank).toFixed(1)}`); });
+  const cls = ['sim-dev', 'sim-hold', 'sim-live'];
+  const lines = segs.map((pp, k) => (pp.length > 1 ? `<polyline class="${cls[k]}" points="${pp.join(' ')}"/>` : '')).join('');
+  const lab = (i) => { const d = S.pts[i].d; return d ? `${+d.slice(4, 6)}/${+d.slice(6, 8)}` : ''; };
+  const xt = [1, Math.floor(S.pts.length / 2), S.pts.length - 1].map((i) => `<text x="${x(i).toFixed(1)}" y="${H - 4}" text-anchor="${i === 1 ? 'start' : i === S.pts.length - 1 ? 'end' : 'middle'}">${lab(i)}</text>`).join('');
+  const gain = S.bank - start;
+  return `<section class="score"><h2>仮想の損益（入金${yen(start)}から機械的に買い続けた場合）</h2>
+    <div class="grid">
+      <div><div class="k">残高</div><div class="v">${Math.round(S.bank / 1000).toLocaleString()}<small>千円</small></div><div class="k">${gain >= 0 ? '+' : ''}${yen(gain)}</div></div>
+      <div><div class="k">回収率（${S.bets.toLocaleString()}点）</div><div class="v">${pct(S.roi)}<small>%</small></div></div>
+      <div><div class="k">最大の落ち込み</div><div class="v">${Math.round(S.dd / 1000).toLocaleString()}<small>千円</small></div></div>
+    </div>
+    <svg class="sim" viewBox="0 0 ${W} ${H}" role="img" aria-label="残高の推移"><line class="base" x1="${L}" x2="${W - L}" y1="${y(start).toFixed(1)}" y2="${y(start).toFixed(1)}"/>${lines}${xt}</svg>
+    <div class="legend"><span class="sim-hold">検証 ${+(state.sim.hold || ['0-1'])[0].slice(5)}〜${+(state.sim.hold || ['0-1']).slice(-1)[0].slice(5)}月（確定オッズ）</span><span class="sim-live">実際の記録（締切前オッズ）</span></div>
+  </section>`;
+}
+
 // 2連単の買い方の比較（research_exacta.json）
 function renderResearch() {
   const E = state.exa;
@@ -485,7 +548,7 @@ function render() {
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
-  if (state.view === 'done') html += renderScore(rs) + renderRecord();
+  if (state.view === 'done') html += renderScore(rs) + renderSim() + renderRecord();
   if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;
