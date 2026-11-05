@@ -12,7 +12,7 @@ const state = {
   date: jstToday(), model: null, snap: null, snapNote: '', races: [], preds: new Map(),
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
   error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null, fair: null, drift: null,
-  mode: loadPref('mode2', 'roi'),
+  mode: 'roi',
   bank: +loadPref('bank2', '500000') || 500000,
 };
 function loadPref(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
@@ -565,7 +565,6 @@ function render() {
   $('#venues').innerHTML = state.view === 'research' ? '' : [[0, 'すべて'], ...venues].map(([j, v]) => `<button type="button" data-venue="${j}" aria-pressed="${state.venue === j}">${esc(v)}</button>`).join('');
   document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
   document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode)));
-  $('#modeRow').hidden = state.view === 'research' || !(state.model && state.model.ce);
   $('#bankRow').hidden = state.view === 'research';
   const list = $('#list');
   if (state.view === 'research') { list.innerHTML = renderResearch(); renderFooter(); return; }
@@ -587,6 +586,7 @@ function renderFooter() {
   const F = state.fair && state.fair.total;
   lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。${m.bet ? `2連単の買い方: ${esc(ruleText(m.bet.rule))}` : ''}${F ? `（公平な検証 回収${pct(F.roi)}%、95%の範囲 ${pct(F.ci95[0])}〜${pct(F.ci95[1])}%）` : ''}`);
   lines.push('予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。');
+  lines.push(state.view === 'research' ? '' : '<button type="button" class="linkish" data-view="research">方法の比較・検証の詳細</button>');
   $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
 }
 

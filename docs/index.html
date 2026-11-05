@@ -213,6 +213,7 @@ svg.sim text { font-size: 10px; fill: var(--muted); font-family: var(--num); }
 .notify-panel p, .notify-panel ol { margin: 4px 0; }
 .notify-panel ol { padding-left: 1.3em; }
 .notify-panel a { color: var(--water); }
+.linkish { font: inherit; font-size: 12px; background: none; border: none; padding: 0; color: var(--water); text-decoration: underline; cursor: pointer; }
 #stake { font-size: 15px; color: var(--ink); }
 .mode button { font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
 .mode button[aria-pressed="true"] { border-color: var(--water); color: var(--water); background: var(--water-soft); font-weight: 700; }
@@ -256,12 +257,6 @@ div.rec .rule { font-size: 11px; color: var(--faint); margin-top: 2px; }
   <div class="tabs" role="group" aria-label="表示">
     <button type="button" data-view="upcoming" aria-pressed="true">締切前</button>
     <button type="button" data-view="done" aria-pressed="false">答え合わせ</button>
-    <button type="button" data-view="research" aria-pressed="false">方法の比較</button>
-  </div>
-  <div class="mode" id="modeRow" role="group" aria-label="予想の重み" hidden>
-    <span>予想の重み</span>
-    <button type="button" data-mode="roi" aria-pressed="true">回収率重視</button>
-    <button type="button" data-mode="exhibit" aria-pressed="false">展示最重視</button>
   </div>
   <div class="mode" id="bankRow">
     <span>入金額</span><input id="bank" type="number" inputmode="numeric" min="0" step="1000" aria-label="資金（円）"><span>円</span><span>1レース</span><b id="stake" class="num">100円</b><button type="button" id="notifyBtn" class="notify-btn">通知</button>
