@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="ja">
 <head>
+<meta http-equiv="Cache-Control" content="no-cache">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>競艇予想</title>
@@ -263,6 +264,6 @@ div.rec .rule { font-size: 11px; color: var(--faint); margin-top: 2px; }
 </header>
 <main id="list"></main>
 <footer id="foot"></footer>
-<script type="module" src="js/app.js"></script>
+<script type="module">import(`./js/app.js?v=${Math.floor(Date.now() / 60000)}`);</script>
 </body>
 </html>

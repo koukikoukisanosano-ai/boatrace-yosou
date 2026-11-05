@@ -1,5 +1,6 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
-import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, evPicks, formation, FEATURE_INDEX, RANK_LABEL } from './core.js';
+// 古いファイルがスマホに残らないよう、ページと同じ版の印（?v=）を付けて読む
+const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, evPicks, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
