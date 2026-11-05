@@ -50,7 +50,7 @@ for (const file of files) {
       ft.write([race.id, race.date, place, race.preview === 'full' ? 1 : 0, ...X[i].map(fmt)].join('\t') + '\n');
       nRows++;
     });
-    rj.write(JSON.stringify({ id: race.id, date: race.date, jcd: race.jcd, rno: race.rno, payouts: race.payouts, refunds: race.refunds, boats: boats.map((b) => b.waku) }) + '\n');
+    rj.write(JSON.stringify({ id: race.id, date: race.date, jcd: race.jcd, rno: race.rno, tech: race.technique, payouts: race.payouts, refunds: race.refunds, boats: boats.map((b) => b.waku) }) + '\n');
     nRaces++;
   }
   for (const race of races) hist.addRace(race); // その日が終わってから結果を取り込む

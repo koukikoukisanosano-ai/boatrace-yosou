@@ -1,5 +1,5 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
-import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, oddsMap, FEATURE_INDEX, RANK_LABEL } from './core.js';
+import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, oddsMap, exactaMap, evPicks, formation, FEATURE_INDEX, RANK_LABEL } from './core.js';
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -10,8 +10,13 @@ const MARKS = ['◎', '○', '▲', '△'];
 const state = {
   date: jstToday(), model: null, snap: null, snapNote: '', races: [], preds: new Map(),
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
-  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null,
+  error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null,
+  mode: loadPref('mode', 'exhibit'),
 };
+function loadPref(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
+function savePref(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 保存できなくても動く */ } }
+// 予想の重み: 展示最重視（枠＋展示航走のモデルを強く混ぜる）/ 総合（的中率がいちばん高い混ぜ方）
+const exhibitW = () => (state.mode === 'total' ? 0 : undefined);
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -112,16 +117,14 @@ async function refresh(full = false) {
   renderStatus();
   try {
     await loadModel();
-    if (full || !state.snap) await loadSnapshot(state.date);
+    if (full || !state.snap) { await loadSnapshot(state.date); predKey.clear(); }
     if (full || !state.report) { try { state.report = (await getJSON('data/report.json', 'no-cache')).json; } catch (e) { state.report = null; } }
     if (!state.research) { try { state.research = (await getJSON('data/research.json', 'no-cache')).json; } catch (e) { state.research = null; } }
+    if (!state.ev) { try { state.ev = (await getJSON('data/research_ev.json', 'no-cache')).json; } catch (e) { state.ev = null; } }
     const [races, live] = await Promise.all([loadDay(state.date), loadLive(state.date)]);
     mergeLive(races, live);
     state.races = races;
-    state.preds.clear();
-    for (const r of races) {
-      try { const p = predictRace(r, state.model, state.snap); if (p) state.preds.set(r.id, p); } catch (e) { console.error(r.id, e); }
-    }
+    await predictAll();
     state.error = '';
     state.loadedAt = new Date();
   } catch (e) {
@@ -131,6 +134,30 @@ async function refresh(full = false) {
     state.loading = false;
     render();
   }
+}
+
+// 予想の計算は重いので、入力（直前情報・オッズ・重み）が変わったレースだけ計算し直す
+const predKey = new Map();
+let predRun = 0;
+async function predictAll() {
+  const run = ++predRun;
+  const keep = new Map();
+  // 締切の近いレースから計算し、少しずつ画面を止めずに進める
+  const order = state.races.slice().sort((a, b) => (a.hasResult - b.hasResult) || (deadline(a) - deadline(b)));
+  let t = performance.now();
+  for (const r of order) {
+    const key = JSON.stringify([state.mode, r.preview, r.odds ? r.odds.site || String(r.odds.at) : '', r.boats.map((b) => [b.exCourse, b.exST, b.exTime, b.tilt, b.weightAdj, b.propNew, (b.parts || []).length, b.place ?? null]), r.wind, r.wave, r.windDir]);
+    if (predKey.get(r.id) === key && state.preds.has(r.id)) { keep.set(r.id, state.preds.get(r.id)); continue; }
+    try { const p = predictRace(r, state.model, state.snap, { exhibitW: exhibitW() }); if (p) { keep.set(r.id, p); predKey.set(r.id, key); } } catch (e) { console.error(r.id, e); }
+    if (performance.now() - t > 40) {
+      await new Promise((res) => setTimeout(res, 0));
+      if (run !== predRun) return false;
+      t = performance.now();
+    }
+  }
+  if (run !== predRun) return false;
+  state.preds = keep;
+  return true;
 }
 
 // ------------------------------------------------------------------ 表示
@@ -242,6 +269,10 @@ function raceDetail(r, pr) {
       if (b.tilt !== null && b.tilt !== undefined) pre.push(`チルト${b.tilt > 0 ? '+' : ''}${b.tilt}`);
       if (b.parts && b.parts.length) pre.push(`<span class="warn">部品交換 ${esc(b.parts.join('・'))}</span>`);
       if (b.propNew) pre.push('<span class="warn">新プロペラ</span>');
+      if (pr.exhibit) {
+        const ex = pr.exhibit[i]; const exMax = Math.max(...pr.exhibit);
+        pre.push(`展示評価 <span class="${ex === exMax ? 'hl' : ''}">${pct(ex)}%</span>`);
+      }
     }
     const f2 = (v) => (v === null || v === undefined ? '-' : v.toFixed(2));
     const stats = [`勝率 ${f2(b.natWin)}`, `当地 ${f2(b.locWin)}`, `モーター ${b.motor2 !== null ? b.motor2.toFixed(1) : '-'}%`, `平均ST ${fmtST(b.avgST)}`];
@@ -283,6 +314,9 @@ function raceDetail(r, pr) {
 
   return `<div class="cond">${cond.map((c) => `<span>${c}</span>`).join('')}<span>${src}</span></div>
     ${rows}
+    ${pr.exhibit ? `<p class="explain">展示評価＝枠（コース）と展示航走（展示タイム・スタート展示・チルト・部品交換など）だけで見た1着の確率。${state.mode === 'total' ? '今は「総合」なので、この評価は予想に少しだけ混ぜています。' : '「展示最重視」では、この評価を予想に強く混ぜています（枠以外では展示航走がいちばん効く重さ）。'}</p>` : ''}
+    ${tenkaiHtml(pr)}
+    ${evHtml(r, pr)}
     ${recommendHtml(r, pr)}
     <h3>3連単の確率<small>上位5点で ${pct(cum5)}%${pr.withOdds ? '・オッズ反映' : ''}</small></h3>
     <div class="bets">${bets}</div>
@@ -294,12 +328,70 @@ function raceDetail(r, pr) {
     ${result}`;
 }
 
+// 展開予想: 誰が・どの決まり手で勝つか、その展開での2・3着
+function tenkaiHtml(pr) {
+  if (!pr.scenarios || !pr.scenarios.length) return '';
+  const top = pr.scenarios.slice(0, 5);
+  const max = top[0].p;
+  const rows = top.map((s) => `<div class="sc">
+      <div class="sc-h">${chip(s.waku)}<span class="sc-n">${s.course}コース <b>${esc(s.name)}</b></span><span class="sc-p num">${pct(s.p)}%</span></div>
+      <div class="sc-bar"><i style="width:${(s.p / max * 100).toFixed(1)}%"></i></div>
+      <div class="sc-f">続く並び ${s.follow.map((f) => `${comboHtml(f.combo)}<span class="p">${pct(f.p)}%</span>`).join('　')}</div>
+    </div>`).join('');
+  return `<h3>展開の予想<small>選手の組み合わせから、決まり手ごとに着順を予想</small></h3>${rows}
+    <p class="explain">展開の確率は展開モデルだけの値（展示評価やオッズを混ぜる前）。「続く並び」はその展開になったときの2・3着の確率です（展開ごとに、1着艇との並び・コースの差・選手の力と展示の差から計算）。</p>`;
+}
+
+// 期待値のある買い目（3連単・2連単）: 予想方法の比較（research_ev.json）で選んだ決め方で、締切前オッズから選ぶ
+const DEFAULT_EV = { t: 1.2, minp: 0.01, maxo: 60, k: 3, alpha: 0.5 };
+function evRule(kind) {
+  const E = state.ev;
+  const w = state.mode === 'total' ? '0' : String((state.model && state.model.exhibit_w) ?? '');
+  const byw = E && E.by_w && (E.by_w[w] || E.by_w[Object.keys(E.by_w).pop()]);
+  const best = byw && byw[kind];
+  if (!best) return { rule: DEFAULT_EV, info: null };
+  return { rule: { ...best.rule, alpha: best.alpha }, info: best };
+}
+function evHtml(r, pr) {
+  if (r.preview === 'none' || !pr.base) return '';
+  const blocks = [];
+  for (const [kind, name] of [['trifecta', '3連単'], ['exacta', '2連単']]) {
+    const { rule, info } = evRule(kind);
+    const past = info ? `<small>過去の検証（本番テスト期間）: 回収${pct(info.hold.roi)}%・的中${pct(info.hold.hit, 1)}%・${info.hold.bets.toLocaleString()}点</small>` : '';
+    const cond = `期待値${rule.t}以上${rule.minp ? `・確率${pct(rule.minp)}%以上` : ''}・${rule.maxo}倍以下・1レース${rule.k}点まで`;
+    const res = evPicks(pr, r, rule, kind);
+    let body;
+    if (res && res.picks.length) {
+      const combos = res.picks.map((x) => x.combo);
+      const ptot = res.picks.reduce((a, x) => a + x.p, 0);
+      const ret = res.picks.reduce((a, x) => a + x.p * x.odds, 0) / res.picks.length;
+      const paid = (r.payouts[kind] || []).map((x) => x.combo);
+      const hit = r.hasResult ? `<span class="hitmark ${combos.some((c) => paid.includes(c)) ? 'yes' : 'no'}">${combos.some((c) => paid.includes(c)) ? '的中' : '外れ'}</span>` : '';
+      body = `<table class="ev"><tbody>${res.picks.map((x) => `<tr><td>${comboHtml(x.combo)}</td><td>${pct(x.p, 1)}%</td><td>${x.odds.toFixed(1)}倍</td><td class="good">${x.ev.toFixed(2)}</td></tr>`).join('')}</tbody></table>
+        <div class="ev-sum">買い方 <b class="num">${formation(combos).join('　')}</b>（${combos.length}点・各100円で${combos.length * 100}円）　当たる確率 計${pct(ptot)}%・期待値 平均${ret.toFixed(2)} ${hit}</div>`;
+    } else if (res) {
+      const near = res.top.slice(0, 3).map((x) => `${comboHtml(x.combo)} ${x.odds.toFixed(1)}倍 期待値${x.ev.toFixed(2)}`).join('　');
+      body = `<div class="ev-sum">条件に合う買い目なし（見送り）。期待値の高い順: ${near}</div>`;
+    } else if (kind === 'exacta' && r.odds && r.odds.t && !r.odds.e) {
+      body = '<div class="ev-sum">2連単のオッズをまだ取れていません。</div>';
+    } else {
+      // オッズがまだ無いとき: この倍率以上なら期待値が条件を超える、という目安
+      const list = (kind === 'exacta' ? pr.exacta : pr.trifecta).filter((x) => x.p >= (rule.minp || 0)).slice(0, kind === 'exacta' ? 3 : 5);
+      body = `<div class="ev-sum">締切7〜2分前にオッズを取ると選びます。目安: ${list.map((x) => `${comboHtml(x.combo)} <b class="num">${(rule.t / x.p).toFixed(1)}</b>倍以上なら買い`).join('　')}</div>`;
+    }
+    blocks.push(`<div class="rec"><div class="rec-h"><b>${name}</b>${past}</div><div class="explain">${cond}${rule.alpha < 1 ? `（予想${pct(rule.alpha)}%＋オッズ${pct(1 - rule.alpha)}%の確率で計算）` : ''}</div>${body}</div>`);
+  }
+  return `<h3>期待値のある買い目<small>期待値＝確率×オッズ</small></h3>${blocks.join('')}
+    <p class="explain">期待値が1を超える買い目は「予想が正しければ得」な買い目です。ただし過去の検証でも回収率が安定して100%を超えるわけではありません（下の「方法の比較」参照）。締切直前にオッズが動くので、買う前に最新のオッズで期待値を確かめてください。</p>`;
+}
+
 // おすすめの買い方: 予想方法の比較（research.json）で、開発期間で選び本番テスト期間で確かめた買い方
 const BET_LABEL = { trifecta: '3連単', trio: '3連複', exacta: '2連単', quinella: '2連複', quinella_place: '拡連複', win: '単勝', place: '複勝' };
 const BET_LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 function recommendHtml(r, pr) {
   const recs = (state.research && state.research.recommend) || [];
-  if (!recs.length || r.preview === 'none') return '';
+  // 展開モデルでは確率の出方が違うので、前の予想方法で選んだ買い方は出さない（期待値の買い目を使う）
+  if (!recs.length || r.preview === 'none' || (state.model && state.model.tenkai)) return '';
   const rows = [];
   for (const rc of recs) {
     const list = pr[BET_LIST[rc.bet]] || [];
@@ -392,7 +484,7 @@ function renderRecord() {
   const recRows = Object.entries(recTot).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.bets}</td><td>${pct(v.hits / Math.max(v.bets, 1))}%</td><td>${pct(v.ret / Math.max(v.bets * 100, 1))}%</td></tr>`).join('');
   return `<section class="score"><h2>毎日の記録（直近${Math.min(days.length, 30)}日: 1着 ${pct(tot.w / tot.r, 1)}%、3連単5点 的中 ${pct(tot.t5 / tot.r, 1)}%、回収 ${pct(tot.ret / (tot.r * 500))}%）</h2>
     <table class="rec"><thead><tr><th>日付</th><th>レース</th><th>1着</th><th>3連単5点</th><th>回収</th></tr></thead><tbody>${rows}</tbody></table>
-    ${recRows ? `<h3>おすすめの買い方の実際の成績（直近${Math.min(days.length, 30)}日）</h3><table class="rec"><thead><tr><th>買い方</th><th>点数</th><th>的中</th><th>回収</th></tr></thead><tbody>${recRows}</tbody></table>` : ''}
+    ${recRows ? `<h3>買い方の実際の成績（直近${Math.min(days.length, 30)}日）</h3><table class="rec"><thead><tr><th>買い方</th><th>点数</th><th>的中</th><th>回収</th></tr></thead><tbody>${recRows}</tbody></table>` : ''}
     <p class="explain">その日の朝の時点のデータと予想モデルで計算し直した成績です（後から分かった結果は使っていません）。</p></section>`;
 }
 
@@ -418,8 +510,26 @@ function renderResearch() {
     <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${recs}</tbody></table>
     <h3>券種ごとの一番良い買い方</h3>
     <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${types}</tbody></table>
+    ${renderEvResearch()}
     <p class="explain">${(R.n_strategies || 0).toLocaleString()}通りの買い方を比べました。どの買い方も、安定して回収率100%を超えるものは見つかっていません（舟券は売上の約25%が差し引かれるため）。単勝・複勝などの確定オッズを見て選ぶと回収率が200%を超えるように見えますが、締切直前の大口買いでオッズが歪んだレースを後から選んでいるだけで、実際には買えないため除いています。</p>
   </section>`;
+}
+
+function renderEvResearch() {
+  const E = state.ev;
+  if (!E) return '';
+  const sw = (E.exhibit_sweep || []).filter((x) => [0, 0.3, 0.5, 0.7, 0.85, 1].includes(x.w));
+  const ew = state.model && state.model.exhibit_w;
+  const sweep = sw.map((x) => `<tr class="${x.w === ew ? 'chosen' : ''}"><td class="l">${x.w === 0 ? '0（総合）' : x.w}${x.w === ew ? ' ← 展示最重視' : ''}</td><td>${(x.importance['展示航走'] * 100).toFixed(1)}</td><td>${(x.importance['選手の力'] * 100).toFixed(1)}</td><td>${(x.importance['近況'] * 100).toFixed(1)}</td><td>${pct(x.win_top1, 1)}</td><td>${pct(x.tri_top1, 1)}</td><td>${pct(x.tri_top5, 1)}</td></tr>`).join('');
+  const row = (x, name) => (x ? `<tr><td class="l">${name}<br><small>${esc(x.label)}${x.alpha < 1 ? `（予想${pct(x.alpha)}%＋オッズ）` : ''}</small></td><td>${pct(x.dev.roi)}%</td><td>${pct(x.hold.roi)}%<br><small>±${pct(x.hold.se)}</small></td><td>${pct(x.hold.hit, 1)}%</td><td>${(x.hold.bets / Math.max(1, (E.hold_days || 120))).toFixed(0)}</td></tr>` : '');
+  const ws = Object.keys(E.by_w || {});
+  const evRows = ws.map((w) => { const b = E.by_w[w]; const nm = w === '0' ? '総合' : '展示最重視'; return row(b.trifecta, `3連単・${nm}`) + row(b.exacta, `2連単・${nm}`); }).join('');
+  return `<h3>展示航走の重さ<small>展開モデル＋（枠＋展示航走のモデル）を混ぜる割合</small></h3>
+    ${sweep ? `<table class="rec-t"><thead><tr><th class="l">展示の割合</th><th>効き<br>展示</th><th>効き<br>選手</th><th>効き<br>近況</th><th>1着</th><th>3連単<br>本命</th><th>3連単<br>上位5</th></tr></thead><tbody>${sweep}</tbody></table>
+    <p class="explain">効き＝その材料をレース内で平均にならしたときに、3連単の予想がどれだけ悪くなるか（大きいほど予想を左右している）。枠（コース）はどの割合でも残しています。展示の割合を0.85にすると、枠以外では展示航走がいちばん効く材料になりますが、的中率は総合より下がります。</p>` : ''}
+    <h3>期待値の買い方（3連単・2連単）</h3>
+    <table class="rec-t"><thead><tr><th class="l">買い方</th><th>開発<br>回収</th><th>本番<br>回収</th><th>的中</th><th>1日の点数<br>(全場)</th></tr></thead><tbody>${evRows}</tbody></table>
+    <p class="explain">開発期間（${esc((E.dev || []).join('・'))}）で一番良かった決め方を、本番テスト期間（${esc((E.hold || []).join('・'))}）で確かめた結果。オッズは確定オッズで計算しているため、締切前のオッズで買う実際の成績はこれより少しぶれます。</p>`;
 }
 
 function render() {
@@ -427,6 +537,8 @@ function render() {
   const venues = [...new Map(state.races.map((r) => [r.jcd, r.venue])).entries()].sort((a, b) => a[0] - b[0]);
   $('#venues').innerHTML = state.view === 'research' ? '' : [[0, 'すべて'], ...venues].map(([j, v]) => `<button type="button" data-venue="${j}" aria-pressed="${state.venue === j}">${esc(v)}</button>`).join('');
   document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
+  document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode)));
+  $('#modeRow').hidden = state.view === 'research' || !(state.model && state.model.tenkai);
   const list = $('#list');
   if (state.view === 'research') { list.innerHTML = renderResearch(); renderFooter(); return; }
   if (state.error && !state.races.length) { list.innerHTML = `<div class="note bad">${esc(state.error)}</div>`; return; }
@@ -447,8 +559,16 @@ function renderFooter() {
   const ev = m.evaluation || {};
   const lines = [];
   const n = (v.n_train_races || 0) + (v.n_valid_races || 0);
-  lines.push(`予想モデル: ${m.trained_until || '-'} までの約${n ? (n / 10000).toFixed(1) : '-'}万レースで学習（スタート展示・展示タイム・チルト・部品交換・気象・選手とモーターの近況を使用）。`);
-  if (ev.top1) lines.push(`学習に使っていないレースでの検証（${ev.period ? `${ev.period[0]}〜${ev.period[1]}` : ''}、${ev.races.toLocaleString()}レース）: 1着の的中 ${pct(ev.top1, 1)}%、3連単 上位5点の的中 ${pct(ev.trifecta['5'].hit, 1)}%、上位5点を買い続けた場合の回収率 ${pct(ev.trifecta['5'].roi)}%。`);
+  lines.push(`予想モデル: ${m.trained_until || '-'} までの約${n ? (n / 10000).toFixed(1) : '-'}万レースで学習。${m.tenkai ? '展開モデル（誰がどの決まり手で勝つか→その展開で2着→3着を、選手の組み合わせから予想）に、枠と展示航走だけのモデルを混ぜています。' : ''}（スタート展示・展示タイム・チルト・部品交換・気象・選手とモーターの近況を使用）`);
+  const evs = (m.evaluation_compare && m.evaluation_compare.tenkai_w0) || null;
+  const one = (e) => `1着の的中 ${pct(e.top1, 1)}%、3連単 本命の的中 ${pct(e.trifecta['1'].hit, 1)}%、上位5点の的中 ${pct(e.trifecta['5'].hit, 1)}%（上位5点を買い続けた回収率 ${pct(e.trifecta['5'].roi)}%）`;
+  if (ev.top1) {
+    lines.push(`学習に使っていないレースでの検証（${ev.period ? `${ev.period[0]}〜${ev.period[1]}` : ''}、${ev.races.toLocaleString()}レース、ページと同じ計算）:`);
+    if (m.tenkai && evs) {
+      lines.push(`展示最重視: ${one(ev)}。`);
+      lines.push(`総合（的中率重視）: ${one(evs)}。展示を最重視すると的中率は下がります。`);
+    } else lines.push(`${one(ev)}。`);
+  }
   lines.push('データ: Boatrace Open API（非公式・約10分おき更新）と、公式サイトから自動で取った直前情報。予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。');
   $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
 }
@@ -466,6 +586,13 @@ document.addEventListener('click', (e) => {
   }
   const vb = e.target.closest('[data-venue]');
   if (vb) { state.venue = +vb.dataset.venue; render(); return; }
+  const mb = e.target.closest('[data-mode]');
+  if (mb) {
+    state.mode = mb.dataset.mode; savePref('mode', state.mode);
+    document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode)));
+    predictAll().then((ok) => { if (ok) render(); });
+    return;
+  }
   const tb = e.target.closest('[data-view]');
   if (tb) { state.view = tb.dataset.view; render(); window.scrollTo({ top: 0 }); return; }
 });

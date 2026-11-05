@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { normalizeDay, Snapshot, prepareModel, predictRace } from '../docs/js/core.js';
+import { normalizeDay, Snapshot, prepareModel, predictRace, evPicks } from '../docs/js/core.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const OUT = path.join(ROOT, 'docs', 'data', 'report.json');
@@ -16,6 +16,16 @@ const model = prepareModel(JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'm
 const report = fs.existsSync(OUT) ? JSON.parse(fs.readFileSync(OUT, 'utf8')) : { days: [] };
 const researchFile = path.join(ROOT, 'docs', 'data', 'research.json');
 const recs = fs.existsSync(researchFile) ? (JSON.parse(fs.readFileSync(researchFile, 'utf8')).recommend || []) : [];
+// 期待値の買い方（research_ev.json で選んだ決め方）: 予想の重みごと
+const evFile = path.join(ROOT, 'docs', 'data', 'research_ev.json');
+const evRes = fs.existsSync(evFile) ? JSON.parse(fs.readFileSync(evFile, 'utf8')) : null;
+const EV_RULES = [];
+if (evRes && evRes.by_w) {
+  for (const [w, b] of Object.entries(evRes.by_w)) {
+    const mode = Number(w) === 0 ? '総合' : '展示最重視';
+    for (const kind of ['trifecta', 'exacta']) if (b[kind]) EV_RULES.push({ w: Number(w), kind, title: `期待値 ${kind === 'trifecta' ? '3連単' : '2連単'}（${mode}）`, rule: { ...b[kind].rule, alpha: b[kind].alpha } });
+  }
+}
 const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 
 for (const ymd of dates) {
@@ -30,7 +40,7 @@ for (const ymd of dates) {
   // その日に締切前に取ったオッズ（ページと同じように予想に混ぜる）
   const liveFile = path.join(ROOT, 'docs', 'live', `${compact}.json`);
   const live = fs.existsSync(liveFile) ? JSON.parse(fs.readFileSync(liveFile, 'utf8')) : null;
-  if (live && live.odds) for (const r of races) { const o = live.odds[`${r.jcd}-${r.rno}`]; if (o && o.t) r.odds = { t: o.t }; }
+  if (live && live.odds) for (const r of races) { const o = live.odds[`${r.jcd}-${r.rno}`]; if (o && o.t) r.odds = { t: o.t, e: o.e }; }
   const s = { date: ymd, model: model.version, races: 0, top1: 0, tri1: 0, tri1Ret: 0, tri5: 0, tri5Ret: 0, ex1: 0, ex1Ret: 0, withOdds: 0, rec: {} };
   for (const r of races) {
     if (!r.hasResult || r.preview === 'none') continue;
@@ -51,6 +61,21 @@ for (const ymd of dates) {
     const e1 = pay(r.payouts.exacta || [], pr.exacta[0].combo);
     if (e1) { s.ex1++; s.ex1Ret += e1; }
     if (pr.withOdds) s.withOdds++;
+    // 期待値の買い方の成績（締切前に取ったオッズで選び、払戻で答え合わせ）
+    const refundsN = (r.refunds || []).map(Number);
+    const prW = { [model.exhibit_w ?? -1]: pr };
+    for (const er of EV_RULES) {
+      const p2 = prW[er.w] || (prW[er.w] = predictRace(r, model, snap, { exhibitW: er.w }));
+      const res = evPicks(p2, r, er.rule, er.kind);
+      if (!res) continue;
+      const x = s.rec[er.title] || (s.rec[er.title] = { bets: 0, hits: 0, ret: 0 });
+      for (const t of res.picks) {
+        x.bets++;
+        if (t.combo.split('-').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
+        const a = pay(r.payouts[er.kind] || [], t.combo);
+        if (a) { x.hits++; x.ret += a; }
+      }
+    }
     // おすすめの買い方の成績
     for (const rc of recs) {
       const list = pr[LIST[rc.bet]] || [];

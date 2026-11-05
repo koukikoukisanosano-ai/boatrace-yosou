@@ -1,6 +1,6 @@
 // core.js の確認（node tests/test_core.mjs）
 import assert from 'node:assert/strict';
-import { trifecta, placeProbs, FEATURES, buildFeatures, Snapshot, normalizeRace } from '../docs/js/core.js';
+import { trifecta, placeProbs, FEATURES, buildFeatures, Snapshot, normalizeRace, formation, exactaMap } from '../docs/js/core.js';
 
 // 3連単の確率の合計は1、1着の確率と合う
 const pp = { win: [0.5, 0.2, 0.12, 0.1, 0.05, 0.03], top2: [0.7, 0.4, 0.33, 0.28, 0.17, 0.12], top3: [0.8, 0.6, 0.52, 0.47, 0.35, 0.26] };
@@ -18,4 +18,11 @@ assert.equal(race.preview, 'none');
 const { X } = buildFeatures(race, new Snapshot(null), null);
 assert.equal(X.length, 6);
 assert.equal(X[0].length, FEATURES.length);
+// 買い目のまとめ（フォーメーション）
+assert.deepEqual(formation(['1-3-2', '1-3-4', '1-3-5']), ['1-3-245']);
+assert.deepEqual(formation(['1-2', '1-3', '2-1']), ['1-23', '2-1']);
+assert.deepEqual(formation(['1-2-3', '2-1-3']).length, 2);
+// 2連単のオッズの並び
+const em = exactaMap(Array.from({ length: 30 }, (_, k) => k + 1));
+assert.equal(em['1-2'], 1); assert.equal(em['6-5'], 30); assert.equal(em['2-1'], 6);
 console.log('ok');

@@ -9,7 +9,8 @@ const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const args = process.argv.slice(2);
 const jsonOut = args.includes('--json') ? args[args.indexOf('--json') + 1] : null;
 const NO_PREVIEW = args.includes('--no-preview');
-const pos = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--json');
+const EXW = args.includes('--exhibit-w') ? Number(args[args.indexOf('--exhibit-w') + 1]) : undefined;
+const pos = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--json' && args[i - 1] !== '--exhibit-w');
 const [modelPath, from, to = '2099-12-31'] = pos;
 const model = prepareModel(JSON.parse(fs.readFileSync(modelPath, 'utf8')));
 
@@ -26,7 +27,7 @@ for (const y of fs.readdirSync(base).sort()) for (const fn of fs.readdirSync(pat
 
 const K_TRI = [1, 3, 5, 10, 20];
 const acc = {
-  races: 0, top1: 0, ll: 0,
+  races: 0, top1: 0, ll: 0, tll: 0,
   tri: Object.fromEntries(K_TRI.map((k) => [k, { hit: 0, ret: 0, cost: 0 }])),
   ex: Object.fromEntries([1, 3, 5].map((k) => [k, { hit: 0, ret: 0, cost: 0 }])),
   trio: Object.fromEntries([1, 3, 5].map((k) => [k, { hit: 0, ret: 0, cost: 0 }])),
@@ -54,7 +55,7 @@ for (const file of files) {
     const snap = new Snapshot(JSON.parse(JSON.stringify(hist.snapshotFor(races))));
     for (const race of races) {
       if (race.preview === 'none') continue;
-      const pr = predictRace(NO_PREVIEW ? { ...race, preview: 'none' } : race, model, snap);
+      const pr = predictRace(NO_PREVIEW ? { ...race, preview: 'none' } : race, model, snap, { exhibitW: EXW });
       if (!pr) continue;
       const tp = race.payouts.trifecta || [];
       if (!tp.length) continue;
@@ -64,6 +65,8 @@ for (const file of files) {
       const iw = pr.boats.findIndex((b) => b.waku === winner.waku);
       const pw = iw >= 0 ? pr.probs.win[iw] : 1e-6;
       acc.ll += -Math.log(Math.max(pw, 1e-9));
+      const tt = pr.trifecta.find((t) => t.combo === tp[0].combo);
+      acc.tll += -Math.log(Math.max(tt ? tt.p : 0, 1e-12));
       const best = pr.probs.win.indexOf(Math.max(...pr.probs.win));
       if (pr.boats[best].waku === winner.waku) acc.top1++;
       const refunds = (race.refunds || []).map(Number);
@@ -92,7 +95,7 @@ for (const file of files) {
 
 const pct = (a, b) => (b ? (100 * a / b).toFixed(1) : '-');
 const out = {
-  period: [from, lastDate], races: acc.races, top1: +(acc.top1 / acc.races).toFixed(4), winnerLogloss: +(acc.ll / acc.races).toFixed(4),
+  period: [from, lastDate], races: acc.races, top1: +(acc.top1 / acc.races).toFixed(4), winnerLogloss: +(acc.ll / acc.races).toFixed(4), triLogloss: +(acc.tll / acc.races).toFixed(4),
   trifecta: Object.fromEntries(Object.entries(acc.tri).map(([k, s]) => [k, { hit: +(s.hit / acc.races).toFixed(4), roi: +(s.ret / s.cost).toFixed(4) }])),
   exacta: Object.fromEntries(Object.entries(acc.ex).map(([k, s]) => [k, { hit: +(s.hit / acc.races).toFixed(4), roi: +(s.ret / s.cost).toFixed(4) }])),
   trio: Object.fromEntries(Object.entries(acc.trio).map(([k, s]) => [k, { hit: +(s.hit / acc.races).toFixed(4), roi: +(s.ret / s.cost).toFixed(4) }])),
@@ -102,7 +105,7 @@ const out = {
   byVenue: Object.fromEntries(Object.entries(acc.byVenue).map(([k, v]) => [k, { n: v.n, top1: +(v.top1 / v.n).toFixed(3) }])),
 };
 console.log(`期間 ${from}〜${lastDate} / ${acc.races} レース`);
-console.log(`1着的中率 ${pct(acc.top1, acc.races)}% / 勝者logloss ${out.winnerLogloss}`);
+console.log(`1着的中率 ${pct(acc.top1, acc.races)}% / 勝者logloss ${out.winnerLogloss} / 3連単logloss ${out.triLogloss}`);
 for (const [name, o] of [['3連単', out.trifecta], ['2連単', out.exacta], ['3連複', out.trio], ['2連複', out.quinella]]) {
   console.log(`${name}: ` + Object.entries(o).map(([k, s]) => `上位${k}点 的中${(s.hit * 100).toFixed(1)}% 回収${(s.roi * 100).toFixed(0)}%`).join(' / '));
 }

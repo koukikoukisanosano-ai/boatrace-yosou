@@ -258,7 +258,17 @@ class Live:
 
     def fetch_odds(self, x: dict):
         html = self.official("odds3t", x["jcd"], x["rno"])
-        return x, (odds_parse.parse("odds3t", html) if html else None)
+        od = odds_parse.parse("odds3t", html) if html else None
+        if od and od.get("t"):
+            # 2連単（と2連複）も取る。取れなくても3連単だけで使う
+            h2 = self.official("odds2tf", x["jcd"], x["rno"])
+            if h2:
+                try:
+                    o2 = odds_parse.parse("odds2tf", h2)
+                    od["e"], od["q"] = o2.get("e"), o2.get("q")
+                except Exception as e:  # noqa: BLE001
+                    log("2連単オッズの読み取り失敗", e)
+        return x, od
 
     def capture_odds(self, xs: list[dict]):
         for x in xs:
@@ -268,7 +278,12 @@ class Live:
                 continue
             key = f"{x['jcd']}-{x['rno']}"
             now = datetime.now(JST)
-            self.store["odds"][key] = {"at": now.isoformat(timespec="seconds"), "site": od.get("at"), "t": od["t"]}
+            rec = {"at": now.isoformat(timespec="seconds"), "site": od.get("at"), "t": od["t"]}
+            if od.get("e") and sum(v is not None for v in od["e"]) >= 15:
+                rec["e"] = od["e"]
+            if od.get("q") and sum(v is not None for v in od["q"]) >= 8:
+                rec["q"] = od["q"]
+            self.store["odds"][key] = rec
             self.store["updated"] = now.isoformat(timespec="seconds")
             self.dirty = True
             self.stats["odds"] = self.stats.get("odds", 0) + 1

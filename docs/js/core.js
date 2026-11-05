@@ -419,8 +419,36 @@ export function rawScore(m, x) {
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 
 // model.json を読み込んだら一度だけ呼ぶ: モデルの特徴量の並びと FEATURES の対応を作る
+// 展開モデルの特徴量: その艇自身・1着艇（w_）・2着艇（s_）・コース差（dcw, dcs）・決まり手（tech_w）
+function compileSpec(names) {
+  return names.map((n) => {
+    if (n in FEATURE_INDEX) return [0, FEATURE_INDEX[n]];
+    if (n.startsWith('w_') && n.slice(2) in FEATURE_INDEX) return [1, FEATURE_INDEX[n.slice(2)]];
+    if (n.startsWith('s_') && n.slice(2) in FEATURE_INDEX) return [2, FEATURE_INDEX[n.slice(2)]];
+    if (n === 'dcw') return [3, 0];
+    if (n === 'dcs') return [4, 0];
+    if (n === 'tech_w') return [5, 0];
+    throw new Error(`未知の特徴量: ${n}`);
+  });
+}
+function pairVec(spec, xc, xa, xb, t) {
+  const ci = FEATURE_INDEX.course;
+  const out = new Array(spec.length);
+  for (let k = 0; k < spec.length; k++) {
+    const [src, j] = spec[k];
+    out[k] = src === 0 ? xc[j] : src === 1 ? xa[j] : src === 2 ? xb[j] : src === 3 ? xc[ci] - xa[ci] : src === 4 ? xc[ci] - xb[ci] : t;
+  }
+  return out;
+}
+
 export function prepareModel(json) {
-  for (const key of ['full', 'full_rw', 'pre', 'clogit']) {
+  if (json.tenkai) {
+    const T = json.tenkai;
+    T.S.featureMap = T.S.features.map((n) => FEATURE_INDEX[n]);
+    T.N2.spec = compileSpec(T.N2.features);
+    T.N3.spec = compileSpec(T.N3.features);
+  }
+  for (const key of ['full', 'full_rw', 'pre', 'clogit', 'ce']) {
     const slot = json[key];
     if (!slot) continue;
     slot.featureMap = (slot.features || FEATURES).map((name) => {
@@ -569,6 +597,104 @@ export function oddsMap(t) {
   return out;
 }
 
+// 2連単のオッズ（1〜6 の順列の辞書順 30通り）→ {'1-2': 倍率}
+export function exactaMap(e) {
+  if (!e) return null;
+  const out = {}; let k = 0;
+  for (let a = 1; a <= 6; a++) for (let b = 1; b <= 6; b++) if (b !== a) { out[`${a}-${b}`] = e[k]; k++; }
+  return out;
+}
+
+// 期待値のある買い目: 予想（オッズを混ぜる前の base）に締切前オッズを割合 alpha で混ぜ、
+// 期待値＝確率×オッズ が rule.t 以上・確率 rule.minp 以上・rule.maxo 倍以下のものを、期待値の高い順に rule.k 点まで
+//   kind: 'trifecta'（3連単のオッズ）/ 'exacta'（2連単のオッズ）
+export function evPicks(pr, race, rule, kind) {
+  if (!pr || !pr.base || !race.odds || !race.odds.t) return null;
+  const om = kind === 'exacta' ? exactaMap(race.odds.e) : oddsMap(race.odds.t);
+  if (!om) return null;
+  const alpha = rule.alpha ?? 0.5;
+  const boats = pr.boats;
+  const tri = alpha < 1 ? (blendOdds(pr.base, boats, oddsMap(race.odds.t), alpha) || pr.base) : pr.base;
+  const perms = permsOf(boats.length);
+  const P = {};
+  perms.forEach(([a, b, c], k) => {
+    const key = kind === 'exacta' ? `${boats[a].waku}-${boats[b].waku}` : `${boats[a].waku}-${boats[b].waku}-${boats[c].waku}`;
+    P[key] = (P[key] || 0) + tri[k];
+  });
+  const all = Object.entries(P).map(([combo, p]) => { const o = om[combo]; return { combo, p, odds: o, ev: o ? p * o : 0 }; })
+    .filter((x) => x.odds > 0).sort((x, y) => y.ev - x.ev);
+  const picks = all.filter((x) => x.ev >= rule.t && x.p >= (rule.minp || 0) && x.odds <= (rule.maxo || 1e9)).slice(0, rule.k || 3);
+  return { picks, top: all.slice(0, 5), alpha };
+}
+
+// 買い目をフォーメーションの書き方にまとめる（例: 1-3-2,4,5 → "1-3-245"）。まとめられない分はそのまま
+export function formation(combos) {
+  const parts = combos.map((c) => c.split('-'));
+  if (!parts.length) return [];
+  const n = parts[0].length;
+  // 最後の着を束ねる → 1つ前の着を束ねる → …
+  let groups = parts.map((p) => p.map((x) => [x]));
+  for (let pos = n - 1; pos >= 0; pos--) {
+    const m = new Map();
+    for (const g of groups) {
+      const key = g.map((s, i) => (i === pos ? '*' : s.join(''))).join('|');
+      if (!m.has(key)) m.set(key, g.map((s) => s.slice()));
+      else { const t = m.get(key); for (const x of g[pos]) if (!t[pos].includes(x)) t[pos].push(x); }
+    }
+    groups = [...m.values()];
+  }
+  // 束ねた結果が元の買い目と同じ点数のときだけ使う（同じ艇が重なる組み合わせを避ける）
+  const count = (g) => { let k = 0; const rec = (i, used) => { if (i === g.length) { k++; return; } for (const x of g[i]) if (!used.includes(x)) rec(i + 1, [...used, x]); }; rec(0, []); return k; };
+  const total = groups.reduce((a, g) => a + count(g), 0);
+  if (total !== combos.length) return combos;
+  return groups.map((g) => g.map((s) => s.sort().join('')).join('-'));
+}
+
+// ------------------------------------------------------------------ 展開モデル
+export const TECH_NAMES = ['', '逃げ', '差し', 'まくり', 'まくり差し', '抜き・恵まれ'];
+function rawMulti(m, x) {
+  const K = m.base.length; const s = m.base.slice();
+  for (const it of m.trees) for (let k = 0; k < K; k++) s[k] += evalTree(it[k], x);
+  return s;
+}
+// 戻り値: tri（3連単・固定の並び）, S[a][t]（a が決まり手 t で勝つ確率）, p2[a][t][b], p3[a][b][c]
+export function tenkai(T, X) {
+  const n = X.length;
+  const S = X.map((x) => { const r = rawMulti(T.S, pick(x, T.S.featureMap)); const mx = Math.max(...r); const e = r.map((v) => Math.exp(v - mx)); const z = e.reduce((a, b) => a + b, 0); return e.map((v) => v / z); });
+  let tot = 0;
+  for (let a = 0; a < n; a++) { S[a][0] = 0; for (let t = 1; t < 6; t++) tot += S[a][t]; }
+  for (let a = 0; a < n; a++) for (let t = 0; t < 6; t++) S[a][t] /= tot;
+  const p2 = [];
+  for (let a = 0; a < n; a++) {
+    p2[a] = [];
+    for (let t = 1; t < 6; t++) {
+      const v = new Array(n).fill(0); let z = 0;
+      for (let b = 0; b < n; b++) if (b !== a) { v[b] = sigmoid(rawScore(T.N2, pairVec(T.N2.spec, X[b], X[a], null, t))); z += v[b]; }
+      p2[a][t] = v.map((x) => x / z);
+    }
+  }
+  const p3 = [];
+  for (let a = 0; a < n; a++) {
+    p3[a] = [];
+    for (let b = 0; b < n; b++) {
+      if (b === a) continue;
+      const v = new Array(n).fill(0); let z = 0;
+      for (let c = 0; c < n; c++) if (c !== a && c !== b) { v[c] = sigmoid(rawScore(T.N3, pairVec(T.N3.spec, X[c], X[a], X[b], 0))); z += v[c]; }
+      p3[a][b] = v.map((x) => x / z);
+    }
+  }
+  const tri = permsOf(n).map(([a, b, c]) => { let s2 = 0; for (let t = 1; t < 6; t++) s2 += S[a][t] * p2[a][t][b]; return s2 * p3[a][b][c]; });
+  const z = tri.reduce((x, y) => x + y, 0);
+  return { tri: tri.map((v) => v / z), S, p2, p3 };
+}
+
+// 2つの3連単の確率を重み w で掛け合わせる（幾何平均）
+function geoMix(t1, t2, w) {
+  const out = t1.map((p, k) => Math.exp((1 - w) * Math.log(Math.max(p, 1e-15)) + w * Math.log(Math.max(t2[k], 1e-15))));
+  const z = out.reduce((a, b) => a + b, 0);
+  return out.map((v) => v / z);
+}
+
 // まとめ: レース → 予想
 //   直前情報あり: 3つの平均（機械学習・新しい日重視・条件付きロジット）。締切前のオッズがあれば混ぜる
 //   展示前: 展示前のモデル
@@ -579,7 +705,28 @@ export function predictRace(race, model, hist, opts = {}) {
   const usePv = race.preview !== 'none';
   let tri;
   const parts = [];
-  if (usePv && model.ensemble) {
+  let scen = null; let exhibit = null;
+  if (usePv && model.tenkai) {
+    // 展開モデル（＋必要なら3つの平均）に、枠＋展示航走だけのモデルを重み w で混ぜる
+    const tk = tenkai(model.tenkai, X);
+    scen = tk;
+    tri = tk.tri;
+    if (model.mix_ens && model.ensemble) {
+      const ens = [];
+      for (const key of model.ensemble) {
+        const m = model[key]; if (!m) continue;
+        ens.push(key === 'clogit' ? plArray(softmax(clogitStrength(m, X))) : triArray(placeProbs(m, X)));
+      }
+      const e = ens[0].map((_, k) => ens.reduce((a, p) => a + p[k], 0) / ens.length);
+      tri = tri.map((p, k) => (1 - model.mix_ens) * p + model.mix_ens * e[k]);
+    }
+    if (model.ce) {
+      const pce = placeProbs(model.ce, X);
+      exhibit = pce.win;
+      const ew = opts.exhibitW ?? model.exhibit_w;
+      if (ew) tri = geoMix(tri, triArray(pce), ew);
+    }
+  } else if (usePv && model.ensemble) {
     for (const key of model.ensemble) {
       const m = model[key];
       if (!m) continue;
@@ -590,6 +737,7 @@ export function predictRace(race, model, hist, opts = {}) {
   } else {
     tri = triArray(placeProbs(usePv ? model.full : (model.pre || model.full), X));
   }
+  const base = tri;
   let withOdds = false;
   if (usePv && race.odds && race.odds.t && opts.blend !== false) {
     const b = blendOdds(tri, boats, oddsMap(race.odds.t), model.blend_alpha ?? 0.5);
@@ -599,5 +747,19 @@ export function predictRace(race, model, hist, opts = {}) {
   const raw = perms.map((p, k) => ({ idx: p, p: tri[k] })).sort((x, y) => y.p - x.p);
   const trifectaList = raw.map((t) => ({ combo: t.idx.map((i) => boats[i].waku).join('-'), p: t.p }));
   const der = derived(raw, boats);
-  return { boats, course, X, probs: placeFromTri(tri, n), trifecta: trifectaList, ...der, withPreview: usePv, withOdds };
+  // 展開シナリオ（誰が・どの決まり手で勝つか）と、その展開での本線（2・3着）
+  let scenarios = null;
+  if (scen) {
+    const list = [];
+    for (let a = 0; a < n; a++) for (let t = 1; t < 6; t++) {
+      const p = scen.S[a][t];
+      if (p < 0.02) continue;
+      const follow = [];
+      for (let b = 0; b < n; b++) if (b !== a) for (let c = 0; c < n; c++) if (c !== a && c !== b) follow.push({ combo: `${boats[a].waku}-${boats[b].waku}-${boats[c].waku}`, p: scen.p2[a][t][b] * scen.p3[a][b][c] });
+      follow.sort((x, y) => y.p - x.p);
+      list.push({ waku: boats[a].waku, course: course[a], tech: t, name: TECH_NAMES[t], p, follow: follow.slice(0, 3) });
+    }
+    scenarios = list.sort((x, y) => y.p - x.p);
+  }
+  return { boats, course, X, probs: placeFromTri(tri, n), trifecta: trifectaList, ...der, withPreview: usePv, withOdds, scenarios, exhibit, base };
 }

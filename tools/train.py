@@ -223,3 +223,27 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def export_multiclass(clf: HistGradientBoostingClassifier) -> dict:
+    """多クラス: {base: [K], trees: [[クラス0の木, …, クラスK-1の木], …（本数ぶん）]}"""
+    base = [float(x) for x in np.ravel(clf._baseline_prediction)]
+    trees = []
+    for it in clf._predictors:
+        row = []
+        for pred in it:
+            one = HistGradientBoostingClassifier.__new__(HistGradientBoostingClassifier)
+            one._baseline_prediction = np.zeros(1)
+            one._predictors = [[pred]]
+            row.append(export_model(one, 0)["trees"][0])
+        trees.append(row)
+    return {"base": base, "trees": trees}
+
+
+def raw_multi_from_export(m: dict, X: np.ndarray) -> np.ndarray:
+    K = len(m["base"])
+    out = np.tile(np.array(m["base"]), (len(X), 1))
+    for it in m["trees"]:
+        for k in range(K):
+            out[:, k] += raw_from_export({"base": 0.0, "trees": [it[k]]}, X)
+    return out
