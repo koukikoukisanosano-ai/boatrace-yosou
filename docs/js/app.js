@@ -12,11 +12,16 @@ const state = {
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
   error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null,
   mode: loadPref('mode2', 'roi'),
+  bank: +loadPref('bank', '20000') || 20000,
 };
 function loadPref(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
 function savePref(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 保存できなくても動く */ } }
 // 予想の重み: 展示最重視（枠＋展示航走のモデルを強く混ぜる）/ 総合（的中率がいちばん高い混ぜ方）
 // 予想の重み: 回収率重視（2連単の買い目を選ぶのと同じ予想）/ 展示最重視（枠＋展示航走のモデルを強く混ぜる）
+// 1点の購入額: 資金の1/200（過去の検証で一番大きかった連敗の落ち込み 約170点分に耐える額）を100円単位、上限3,000円
+const MAX_STAKE = 3000;
+const stake = () => Math.min(MAX_STAKE, Math.max(100, Math.floor(state.bank / 200 / 100) * 100));
+const yen = (v) => `${Math.round(v).toLocaleString()}円`;
 const exhibitW = () => (state.mode === 'exhibit' ? (state.model && state.model.exhibit_w) || 0.85 : 0);
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -237,7 +242,7 @@ function raceRow(r) {
     const t = pr.exacta[0];
     const xb = exactaPicks(r, pr);
     const br = betResult(r, xb);
-    const betTag = xb.state === 'buy' ? `<span class="bet buy">買い ${formation(xb.picks.map((p) => p.combo)).join(' ')}</span>${br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 ${br.amount.toLocaleString()}円` : '外れ'}</span>` : ''}`
+    const betTag = xb.state === 'buy' ? `<span class="bet buy">買い ${formation(xb.picks.map((p) => p.combo)).join(' ')} ${yen(stake() * xb.picks.length)}</span>${br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 +${yen(br.amount * stake() / 100 - stake() * xb.picks.length)}` : '外れ'}</span>` : ''}`
       : xb.state === 'pass' ? '<span class="bet pass">見送り</span>' : '';
     const pv = r.preview === 'none' ? '<span class="pv none">展示前</span>' : '';
     picks = `<span class="picks"><span class="marks">${marks}</span><span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${betTag}${pv}</span>`;
@@ -368,8 +373,8 @@ function evHtml(r, pr) {
   if (x.state === 'buy') {
     const combos = x.picks.map((p) => p.combo);
     const br = betResult(r, x);
-    const hit = br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 ${br.amount.toLocaleString()}円` : '外れ'}</span>` : '';
-    body = `<div class="ev-sum"><b class="num big-bet">${formation(combos).join('　')}</b>${x.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値 <b class="good">${p.ev.toFixed(2)}</b></span>`).join('')} ${hit}</div>`;
+    const hit = br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 払戻${yen(br.amount * stake() / 100)}` : '外れ'}</span>` : '';
+    body = `<div class="ev-sum"><b class="num big-bet">${formation(combos).join('　')}</b><b class="num big-bet">${yen(stake() * combos.length)}</b>${x.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値 <b class="good">${p.ev.toFixed(2)}</b></span>`).join('')} ${hit}</div>`;
   } else if (x.state === 'pass') {
     body = '<div class="ev-sum"><b>見送り</b></div>';
   } else {
@@ -430,7 +435,7 @@ function renderScore(rs) {
   return `<section class="score"><h2>答え合わせ（${done.length}レース）</h2><div class="grid">
     <div><div class="k">1着の的中</div><div class="v">${pct(win / done.length)}<small>%</small></div></div>
     <div><div class="k">2連単 本命の的中</div><div class="v">${pct(ex1 / done.length)}<small>%</small></div></div>
-    <div><div class="k">買い目 ${bets}点 的中${hits}</div><div class="v">${bets ? pct(ret / (bets * 100)) : '-'}<small>%回収</small></div></div>
+    <div><div class="k">買い目 ${bets}点 的中${hits}（1点${yen(stake())}）</div><div class="v">${bets ? pct(ret / (bets * 100)) : '-'}<small>%回収</small></div><div class="k">${bets ? `${ret / 100 * stake() - bets * stake() >= 0 ? '+' : ''}${yen(ret / 100 * stake() - bets * stake())}` : ''}</div></div>
   </div></section>`;
 }
 
@@ -473,6 +478,7 @@ function render() {
   document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
   document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode)));
   $('#modeRow').hidden = state.view === 'research' || !(state.model && state.model.ce);
+  $('#bankRow').hidden = state.view === 'research';
   const list = $('#list');
   if (state.view === 'research') { list.innerHTML = renderResearch(); renderFooter(); return; }
   if (state.error && !state.races.length) { list.innerHTML = `<div class="note bad">${esc(state.error)}</div>`; return; }
@@ -536,6 +542,12 @@ $('#next').addEventListener('click', () => {
   state.date = n; state.races = []; state.open.clear(); state.view = n >= jstToday() ? 'upcoming' : 'done'; refresh(true);
 });
 $('#reload').addEventListener('click', () => refresh(false));
+function renderBank() { $('#bank').value = state.bank; $('#stake').textContent = yen(stake()); }
+$('#bank').addEventListener('change', (e) => {
+  const v = Math.max(0, Math.round(+e.target.value || 0));
+  state.bank = v || 20000; savePref('bank', String(state.bank)); renderBank(); render();
+});
+renderBank();
 
 // 締切直前のオッズ: 開いているレースが締切3分前〜締切のあいだは、15秒ごとに GitHub から直接読む（公開の反映を待たない）
 const LIVE_API = 'https://api.github.com/repos/koukikoukisanosano-ai/boatrace-yosou/contents/docs/live';
