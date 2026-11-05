@@ -13,14 +13,14 @@ const state = {
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
   error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null,
   mode: loadPref('mode2', 'roi'),
-  bank: +loadPref('bank', '20000') || 20000,
+  bank: +loadPref('bank2', '500000') || 500000,
 };
 function loadPref(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
 function savePref(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 保存できなくても動く */ } }
 // 予想の重み: 展示最重視（枠＋展示航走のモデルを強く混ぜる）/ 総合（的中率がいちばん高い混ぜ方）
 // 予想の重み: 回収率重視（2連単の買い目を選ぶのと同じ予想）/ 展示最重視（枠＋展示航走のモデルを強く混ぜる）
-// 1点の購入額: 資金の1/200（過去の検証で一番大きかった連敗の落ち込み 約170点分に耐える額）を100円単位、上限3,000円
-const MAX_STAKE = 3000;
+// 1レースの購入額: 資金の1/200（過去の検証で一番大きかった連敗の落ち込み 約170点分に耐える額）を100円単位。上限なし
+const MAX_STAKE = Infinity;
 const stake = () => Math.min(MAX_STAKE, Math.max(100, Math.floor(state.bank / 200 / 100) * 100));   // 1レースの購入額
 const perPoint = (n) => Math.max(100, Math.floor(stake() / n / 100) * 100);                          // 何点か買うときの1点の額
 const buyText = (n) => (n > 1 ? `各${yen(perPoint(n))}×${n}点` : yen(stake()));
@@ -454,7 +454,7 @@ function renderRecord() {
     <table class="rec"><thead><tr><th>日付</th><th>買い目</th><th>的中</th><th>回収</th><th>本命的中</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
-// 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1点＝残高の1/200、100円単位、上限3,000円）
+// 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1レース＝残高の1/200、100円単位）
 const SIM_FROM = '2026-11-06';
 function simulate(start) {
   const pts = []; let bank = start; let peak = start; let dd = 0; let bets = 0; let cost = 0; let ret = 0; let last = '';
@@ -607,7 +607,7 @@ $('#reload').addEventListener('click', () => refresh(false));
 function renderBank() { $('#bank').value = state.bank; $('#stake').textContent = yen(stake()); }
 $('#bank').addEventListener('change', (e) => {
   const v = Math.max(0, Math.round(+e.target.value || 0));
-  state.bank = v || 20000; savePref('bank', String(state.bank)); renderBank(); render();
+  state.bank = v || 500000; savePref('bank2', String(state.bank)); renderBank(); render();
 });
 renderBank();
 
