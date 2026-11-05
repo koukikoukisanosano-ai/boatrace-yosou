@@ -281,9 +281,10 @@ export const FEATURES = [
   'pN90', 'pAvgFin', 'pWin10', 'pTop3', 'pCourseWin', 'pCourseTop2', 'pCourseTop3', 'pCourseN', 'pVenueWin',
   'pSetsuAvg', 'pSetsuN', 'pDaysOff', 'pSTavg', 'pSTstd', 'pF180', 'stEst', 'stEstRank', 'stEstVsInner', 'stEstVsOuter',
   'mAvgFin', 'mWin', 'mN', 'pAvgFinRank', 'pCourseWinRank',
-  // 普段の展示の出方（選手・モーターごとの、展示タイムのレース内平均との差の平均）と、今日の展示との差
-  'pExRel', 'mExRel', 'exRelVsOwn', 'exRelVsMotor', 'exRelVsBoth',
 ];
+// 試して採用しなかった材料（2026-11: 2連単の当たり具合はわずかに良くなったが、回収率は買い方によって上下し、はっきり良くならなかった）:
+//   普段の展示の出方（選手・モーターごとの展示タイムのレース内平均との差の平均）と今日の展示との差
+//   'pExRel', 'mExRel', 'exRelVsOwn', 'exRelVsMotor', 'exRelVsBoth'（近況の記録 relEx は残している）
 export const FEATURE_INDEX = Object.fromEntries(FEATURES.map((f, i) => [f, i]));
 
 function raceType(race) {
