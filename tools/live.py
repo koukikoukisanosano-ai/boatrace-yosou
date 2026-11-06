@@ -173,6 +173,8 @@ class Live:
 
     def load(self, day: str):
         self.day = day
+        if self.push:   # 前の実行が保存した最新を取り込んでから始める（古いもので上書きしない）
+            self.git("pull", "-q", "--rebase", "-X", "theirs")
         p = self.path()
         self.store = json.loads(p.read_text()) if p.exists() else {"date": day, "updated": None, "races": {}}
         self.store.setdefault("odds", {})
@@ -429,10 +431,30 @@ class Live:
     def git(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
 
+    def merge_saved(self):
+        """保存済みのファイル（ほかの実行が書いた分も含む）にあって、手元にないレースを取り込む"""
+        p = self.path()
+        if not p.exists():
+            return
+        try:
+            saved = json.loads(p.read_text())
+        except Exception:  # noqa: BLE001
+            return
+        for sec in ("races", "odds", "picks"):
+            mine = self.store.setdefault(sec, {})
+            for k, v in (saved.get(sec) or {}).items():
+                if k not in mine:
+                    mine[k] = v
+                elif sec == "odds" and v.get("final") and not mine[k].get("final"):
+                    mine[k] = {**mine[k], **v}
+
     def publish(self):
         """書き出して保存（push）し、ページの公開を依頼する。push できなかった分は次の回にまとめて送る"""
         if self.dirty:
             LIVE_DIR.mkdir(parents=True, exist_ok=True)
+            if self.push:
+                self.git("pull", "-q", "--rebase", "-X", "theirs")   # 先に最新を取り込み、
+            self.merge_saved()                                        # 手元にないレースを足してから書く
             self.path().write_text(json.dumps(self.store, ensure_ascii=False, separators=(",", ":")))
             self.dirty = False
             if self.push:
@@ -497,8 +519,9 @@ class Live:
             self.deploy()
             if once:
                 break
-            if time.time() - started > max_minutes * 60:
+            if time.time() - started > max_minutes * 60 and not self.soon(datetime.now(JST)):
                 log("時間になったので終了（次の実行に引き継ぎ）")
+                Path(os.environ.get("RUNNER_TEMP", "/tmp"), "live_continue").write_text("1")   # ワークフローが次の実行をすぐ予約する
                 break
             time.sleep(4 if self.soon(datetime.now(JST)) else 20)
         self.publish()

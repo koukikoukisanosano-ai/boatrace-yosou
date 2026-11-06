@@ -43,3 +43,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           python tools/live.py --max-minutes 330
+      - name: 続きをすぐ始める（予定の時刻に始まらないことがあるので、自分で次を予約する）
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/live_continue" ]; then
+            for i in 1 2 3; do gh workflow run live.yml --ref main && echo "次の実行を予約しました" && break; sleep 10; done
+          fi
