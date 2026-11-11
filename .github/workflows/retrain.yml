@@ -1,0 +1,70 @@
+name: 学習し直し（毎週月曜・公式の過去データ込み）
+
+on:
+  schedule:
+    - cron: '17 16 * * 0'   # 月曜 1:17（日本時間）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: retrain
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt
+      - name: 過去データの取り込み（昨日まで）
+        run: python tools/fetch_openapi.py
+      - name: 公式の過去データ（2016〜2024年8月）と、近況の下地
+        run: |
+          mkdir -p data/mbrace tars
+          gh release download mbrace-data -p 'mbrace_*.tar' -D tars
+          for t in tars/mbrace_*.tar; do tar xf "$t" -C data/mbrace; done
+          rm -rf tars
+          node --max-old-space-size=8192 tools/hist_base.mjs build data/mbrace
+      - name: 確かめる（下地から作った近況 = 過去データを読み込んで作った近況。学習と毎朝の予想で同じ値になるか）
+        run: |
+          F=$(date -d '-14 days' +%F)
+          node --max-old-space-size=10240 tools/build_dataset.mjs chk/a --extra=data/mbrace --rows-from=$F
+          node --max-old-space-size=8192 tools/build_dataset.mjs chk/b --rows-from=$F
+          wc -l chk/a/features.tsv chk/b/features.tsv
+          cmp chk/a/features.tsv chk/b/features.tsv && echo "一致しました" || { echo "近況が一致しません"; exit 1; }
+          rm -rf chk
+          gh release upload mbrace-data data/hist_base.json.gz --clobber
+      - name: 学習し直し（2020年1月から）
+        run: MBRACE=data/mbrace WORK=work bash tools/retrain.sh
+      - name: 今日の近況を作り直す（新しいモデルと同じ下地で）
+        run: node tools/make_state.mjs || echo "出走表がまだありません（朝の準備で作ります）"
+      - name: 保存
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/model docs/data/state
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -q -m "学習し直し $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3 4 5 6; do
+            if git pull -q --rebase -X theirs && git push -q; then echo "保存しました"; exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          echo "保存に失敗しました"; exit 1
+      - name: ページを公開
+        run: gh workflow run pages.yml --ref main

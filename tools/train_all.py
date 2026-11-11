@@ -8,7 +8,7 @@
   展示前（直前情報なし）の機械学習            … pre
 
 検証: 最新日の60日前より前で学習 → 直近60日をページと同じ計算（Node）で予想し直して成績を出す
-本番: 全期間（2024-11〜）で学習し直して書き出す
+本番: 全期間（TRAIN_FROM〜。公式の過去データを足すときは 2020-01〜）で学習し直して書き出す
 
   python tools/train_all.py --work work
 """
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -32,7 +33,7 @@ from tenkai import COURSE, EXHIBIT, TECH, clf as tk_clf, pair_feats, pair_rows, 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {"win": 1, "top2": 2, "top3": 3}
 HALF_LIFE = 90
-TRAIN_FROM = "2024-11-01"   # Open API のデータは 2024-09-01 から
+TRAIN_FROM = os.environ.get("TRAIN_FROM", "2024-11-01")   # 公式の過去データ（2016〜）を足すときは 2020-01-01（tools/retrain.sh）
 EXHIBIT_W = 0.85     # 展示航走の重み: 枠以外では展示航走がいちばん効く重さ（tools/tenkai_exhibit.py で決めた値）
 t0 = time.time()
 
@@ -259,6 +260,8 @@ def main():
     _, f_pre = refit_gbm(dp, feats_pre, it_pre)
     out = {
         "version": time.strftime("%Y%m%d%H%M"), "trained_until": str(df.date.max()), "vc": vc_all,
+        # 公式の過去データ（2016〜）を近況に使って学習したか: そうなら毎朝の近況（make_state.mjs）も下地 data/hist_base.json.gz から作る
+        "hist_base": bool(os.environ.get("MBRACE")), "train_from": TRAIN_FROM,
         # 直前情報ありの予想: mix のモデルを掛け合わせる（オッズは混ぜない）。展示最重視の表示では ce を exhibit_w で混ぜる
         "mix": mix, "bet": bet, "blend_alpha": 1,
         "pre": {"features": feats_pre, **f_pre},

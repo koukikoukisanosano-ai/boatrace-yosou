@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { normalizeDay, History, dayNumber } from '../docs/js/core.js';
+import { startHistory } from './hist_base.mjs';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const OUT = path.join(ROOT, 'docs', 'data', 'state');
@@ -43,15 +44,7 @@ async function fetchDay(ymd) {
 }
 
 // 前日までの結果で近況を作る
-const hist = new History();
-const warm = path.join(ROOT, 'data', 'warmup');
-// Open API に2025年以前の日があれば、そちらを使う（PC版の下地と重ならないように）
-const hasOldOpenApi = fs.readdirSync(path.join(ROOT, 'data', 'openapi')).some((y) => y < '2026');
-if (fs.existsSync(warm) && !hasOldOpenApi) {
-  for (const fn of fs.readdirSync(warm).filter((x) => x.endsWith('.jsonl.gz')).sort()) {
-    for (const ln of zlib.gunzipSync(fs.readFileSync(path.join(warm, fn))).toString('utf8').split('\n')) if (ln) hist.addRace(JSON.parse(ln));
-  }
-}
+const { hist } = startHistory(); // 公式の過去データの下地（data/hist_base.json.gz）があればそこから
 const base = path.join(ROOT, 'data', 'openapi');
 const files = [];
 for (const y of fs.readdirSync(base).sort()) for (const fn of fs.readdirSync(path.join(base, y)).sort()) files.push(path.join(base, y, fn));

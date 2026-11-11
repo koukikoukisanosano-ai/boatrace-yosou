@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { normalizeDay, History, Snapshot, buildFeatures, FEATURES, dayNumber } from '../docs/js/core.js';
+import { startHistory } from './hist_base.mjs';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const NO_PREVIEW = process.argv.includes('--no-preview'); // 展示前の予想用（直前情報を使わない）
@@ -13,18 +14,9 @@ const OUT = path.resolve(process.argv.slice(2).find((a) => !a.startsWith('--')) 
 const EXTRA = (process.argv.find((a) => a.startsWith('--extra=')) || '').slice(8);
 fs.mkdirSync(OUT, { recursive: true });
 
-// 1) 近況の下地: PC版で集めた 2025年10〜12月の結果（あれば）
-const hist = new History();
-const warm = path.join(ROOT, 'data', 'warmup');
-// Open API に2025年以前の日があれば、そちらを使う（PC版の下地と重ならないように）
-const hasOldOpenApi = EXTRA || fs.readdirSync(path.join(ROOT, 'data', 'openapi')).some((y) => y < '2026');
-if (fs.existsSync(warm) && !hasOldOpenApi) {
-  for (const fn of fs.readdirSync(warm).filter((x) => x.endsWith('.jsonl.gz')).sort()) {
-    const lines = zlib.gunzipSync(fs.readFileSync(path.join(warm, fn))).toString('utf8').split('\n').filter(Boolean);
-    for (const ln of lines) hist.addRace(JSON.parse(ln));
-    console.error(`下地 ${fn}: ${lines.length} レース`);
-  }
-}
+// 1) 近況の下地: --extra のときは公式の過去データを日付順に読み込む（下地は使わない）。
+//    それ以外は data/hist_base.json.gz（公式の過去データを読み込んだ後の状態）か、PC版で集めた下地
+const { hist } = EXTRA ? { hist: new History() } : startHistory();
 
 // 2) Open API の日別データを日付順に
 let files = [];

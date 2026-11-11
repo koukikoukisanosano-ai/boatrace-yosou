@@ -1,4 +1,4 @@
-name: 毎朝の準備（結果の取り込み・近況・学習し直し）
+name: 毎朝の準備（結果の取り込み・近況）
 
 on:
   schedule:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       retrain:
-        description: '学習し直す'
+        description: '学習し直す（「学習し直し」のワークフローを動かす）'
         type: boolean
         default: false
 
@@ -43,17 +43,18 @@ jobs:
         run: python tools/fetch_openapi.py
       - name: 昨日の答え合わせを記録
         run: node tools/report.mjs || echo "記録できませんでした"
+      - name: 近況の下地（今のモデルが公式の過去データ込みで学習したときだけ）
+        run: |
+          if python -c "import json,sys;sys.exit(0 if json.load(open('docs/model/model.json')).get('hist_base') else 1)"; then
+            gh release download mbrace-data -p hist_base.json.gz -D data --clobber
+          else
+            echo "今のモデルは下地なしで学習しています"
+          fi
       - name: 今日走る選手の近況
         run: node tools/make_state.mjs
-      - name: 学習し直し（毎週月曜・または手動）
-        run: |
-          TODAY=$(date +%Y%m%d)
-          VER=$(python -c "import json;print(json.load(open('docs/model/model.json')).get('version','')[:8])" 2>/dev/null || echo "")
-          if [ "${{ inputs.retrain }}" = "true" ] || { [ "$(date +%u)" = "1" ] && [ "$VER" != "$TODAY" ]; }; then
-            WORK=work bash tools/retrain.sh
-          else
-            echo "学習し直しは毎週月曜です（今のモデル: $VER）"
-          fi
+      - name: 学習し直し（手動のときだけ。毎週月曜は「学習し直し」のワークフロー）
+        if: inputs.retrain
+        run: gh workflow run retrain.yml --ref main
       - name: 保存
         run: |
           git config user.name "github-actions[bot]"
