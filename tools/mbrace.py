@@ -50,8 +50,15 @@ RE_K_BOAT = re.compile(r"^\s+(\d\d|[FLKS]\d?|欠|転|落|沈|妨|エ|不)\s+([1-
 RE_K_PAY = re.compile(r"^\s+(単勝|複勝|２連単|２連複|拡連複|３連単|３連複)?\s+([\d\-=]+)\s+(\d+)(.*)$")
 
 
+def tech_of(s: str):
+    s = re.sub(r"\s", "", z2h(s))
+    s = "".join(chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c for c in s)   # カタカナ → ひらがな（半角ｶﾅで書かれている年がある）
+    return TECH.get(s) or {"にげ": 1, "さし": 2, "まくりさし": 4, "まくりざし": 4, "ぬき": 5, "めぐまれ": 6}.get(s)
+
+
 def parse_k(text: str) -> dict:
     """{jcd: {date, races: {rno: {...}}}}"""
+    text = z2h(text)   # 半角カナ・全角英数をそろえる（全角空白も1文字の空白になるので桁の位置は変わらない）
     out, jcd, ymd, race, rno, payk = {}, None, None, None, None, None
     for ln in text.splitlines():
         m = RE_K_HEAD.match(ln)
@@ -79,8 +86,7 @@ def parse_k(text: str) -> dict:
         if race is None:
             continue
         if "レースタイム" in ln:
-            tail = ln.split("レースタイム")[-1].strip().replace("　", "")
-            race["technique"] = TECH.get(tail)
+            race["technique"] = tech_of(ln.split("レースタイム")[-1])
             continue
         m = RE_K_BOAT.match(ln)
         if m:
