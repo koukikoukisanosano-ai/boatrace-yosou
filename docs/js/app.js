@@ -362,7 +362,7 @@ function betRule() {
   return b ? { rule: { ...b.rule, alpha: 1 }, info: b } : { rule: DEFAULT_BET, info: null };
 }
 function exactaPicks(r, pr) {
-  // 締切約5分前に自動で決めた買い目（通知したもの）があれば、それに従う
+  // 締切約2〜3分前に自動で決めた買い目（通知したもの）があれば、それに従う
   if (r.botPick && (r.botPick.state === 'buy' || r.botPick.state === 'pass')) return { state: r.botPick.state, picks: r.botPick.picks || [], top: [], bot: true };
   if (!pr || r.preview === 'none' || !pr.base) return { state: 'none' };
   if (!r.odds || !r.odds.e) return { state: 'wait' };
@@ -391,7 +391,7 @@ function evHtml(r, pr) {
     const list = pr.exacta.filter((p) => p.p >= (rule.minp || 0)).slice(0, 3);
     body = `<div class="ev-sum">オッズ待ち　${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, (rule.mino || 0) + 0.1, 1).toFixed(1)}</b>倍以上で買い`).join('　')}</div>`;
   }
-  return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目${x.bot ? '（約5分前に決定・通知）' : ''}</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>`;
+  return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目${x.bot ? '（約2〜3分前に決定・通知）' : ''}</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>`;
 }
 
 // 根拠: 特徴量の値から、目立つ点を文章にする
@@ -631,12 +631,12 @@ $('#next').addEventListener('click', () => {
   state.date = n; state.races = []; state.open.clear(); state.view = n >= jstToday() ? 'upcoming' : 'done'; refresh(true);
 });
 $('#reload').addEventListener('click', () => refresh(false));
-// 通知（ntfy）: 買い目が決まったら（締切約5分前）スマホに知らせる
+// 通知（ntfy）: 買い目が決まったら（締切約2〜3分前）スマホに知らせる
 let notifyCfg = null;
 async function renderNotify() {
   if (!notifyCfg) { try { notifyCfg = (await getJSON('notify.json', 'no-cache')).json; } catch (e) { return; } }
   const el = $('#notifyPanel');
-  el.innerHTML = `<p>締切の約5分前に買い目が決まると、スマホに通知します（ページを開いていなくても届きます）。</p>
+  el.innerHTML = `<p>締切の約2〜3分前に買い目が決まると、スマホに通知します（ページを開いていなくても届きます）。</p>
     <ol><li>App Store で「ntfy」アプリを入れる（無料）</li>
     <li>アプリの「＋」で、トピック名に <b class="num">${esc(notifyCfg.topic)}</b> を入れて登録</li></ol>
     <p><a href="https://ntfy.sh/${encodeURIComponent(notifyCfg.topic)}" target="_blank" rel="noopener">ブラウザで通知の一覧を見る</a>　通知の金額は入金${Math.round(notifyCfg.bank / 10000)}万円で計算しています。</p>`;

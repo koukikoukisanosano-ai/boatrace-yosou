@@ -50,8 +50,8 @@ INTERVAL = 1.0          # 公式サイトへのリクエストを始める間隔
 WORKERS = 3             # 同時に取りに行く数
 WINDOW_BEFORE = 20      # 締切の何分前から取りに行くか
 RETRY_SEC = 70          # まだ出ていなかったレースを次に見に行くまでの秒数（締切10分前を切ったら40秒）
-LEAD = float(NOTIFY.get("lead_min", 5))   # 締切の何分前に買い目を決めて通知するか（投票が間に合うように）
-ODDS_FROM, ODDS_TO = LEAD + 1.0, max(LEAD - 1.5, 1.6)   # この間に1回、2連単・3連単オッズを取って買い目を決める
+LEAD = float(NOTIFY.get("lead_min", 5))   # 締切の何分前に買い目を決めて通知するか（投票が間に合うように。2分前なら間に合う）
+ODDS_FROM, ODDS_TO = LEAD + 1.0, max(LEAD - 1.5, 1.8)   # この間に1回、2連単・3連単オッズを取って買い目を決める
 FINAL_FROM, FINAL_TO = 1.5, 0.4  # 締切1分前ごろに2連単オッズをもう一度取る
 
 
@@ -257,7 +257,7 @@ class Live:
         return out
 
     def odds_targets(self, now: datetime) -> list[dict]:
-        """締切の約5分前（ODDS_FROM〜ODDS_TO）で、まだオッズを取っていないレース"""
+        """締切の LEAD 分前ごろ（ODDS_FROM〜ODDS_TO）で、まだオッズを取っていないレース"""
         out = []
         for x in self.schedule:
             key = f"{x['jcd']}-{x['rno']}"
@@ -320,7 +320,7 @@ class Live:
         return False
 
     def notify_targets(self, now: datetime) -> list[str]:
-        """買い目を決めて知らせるレース: 締切の約5分前に2連単オッズを取れたら、すぐ（締切まで時間があるうちに）"""
+        """買い目を決めて知らせるレース: 締切の LEAD 分前ごろに2連単オッズを取れたら、すぐ（締切まで時間があるうちに）"""
         out = []
         for x in self.schedule:
             key = f"{x['jcd']}-{x['rno']}"
