@@ -11,6 +11,12 @@ on:
       variants:
         description: '試しに作る予想（例 rank,tenkai_l63）。空なら本番と同じものだけ'
         default: ''
+      mbrace:
+        description: '公式の過去データを足す年（例 2020 2021 2022 2023 2024）。空なら足さない'
+        default: ''
+      train_from:
+        description: '学習に使う最初の日'
+        default: '2024-11-01'
 
 permissions:
   contents: write
@@ -52,10 +58,18 @@ jobs:
         with:
           node-version: '22'
       - run: pip install -r requirements.txt lightgbm
+      - name: 公式の過去データ（指定したときだけ）
+        if: inputs.mbrace != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p data/mbrace
+          for y in ${{ inputs.mbrace }}; do gh release download mbrace-data -p "mbrace_$y.tar" -O - | tar xf - -C data/mbrace; done
+          echo "EXTRA=--extra=data/mbrace" >> "$GITHUB_ENV"
       - name: 学習用の表
-        run: node --max-old-space-size=6144 tools/build_dataset.mjs work/full
+        run: node --max-old-space-size=10240 tools/build_dataset.mjs work/full $EXTRA
       - name: その月より前だけで学習して、その月を予想
-        run: python tools/fair_fit.py --work work/full --month ${{ matrix.month }} --out fair_${{ matrix.month }}.pkl --variants "${{ inputs.variants }}"
+        run: python tools/fair_fit.py --work work/full --month ${{ matrix.month }} --out fair_${{ matrix.month }}.pkl --variants "${{ inputs.variants }}" --train-from "${{ inputs.train_from || '2024-11-01' }}"
       - uses: actions/upload-artifact@v4
         with:
           name: fair_${{ matrix.month }}
@@ -86,7 +100,8 @@ jobs:
         run: node --max-old-space-size=6144 tools/build_dataset.mjs work/full
       - name: 月ごとに、それより前だけで選んだ買い方で答え合わせ
         run: python tools/fair_eval.py --preds fair --work work/full | tee fair.log
-      - name: 保存
+      - name: 保存（試しの検証のときは保存しない）
+        if: inputs.mbrace == '' && inputs.variants == '' && (inputs.train_from == '' || inputs.train_from == '2024-11-01')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -6,6 +6,10 @@ on:
       run_id:
         description: '「公平な検証（月ごとに予想し直す）」の実行ID'
         required: true
+      save:
+        description: '結果を本番の検証結果（fair.json）として保存する'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -38,6 +42,7 @@ jobs:
       - name: 月ごとに、それより前だけで選んだ買い方で答え合わせ
         run: python tools/fair_eval.py --preds fair --work work/full | tee fair.log
       - name: 保存
+        if: inputs.save
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

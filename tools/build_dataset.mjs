@@ -9,13 +9,15 @@ import { normalizeDay, History, Snapshot, buildFeatures, FEATURES, dayNumber } f
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const NO_PREVIEW = process.argv.includes('--no-preview'); // 展示前の予想用（直前情報を使わない）
 const OUT = path.resolve(process.argv.slice(2).find((a) => !a.startsWith('--')) || path.join(ROOT, 'work'));
+// --extra=DIR: 公式の過去データ（tools/mbrace.py で Open API の形にしたもの）。Open API より前の日だけ使う
+const EXTRA = (process.argv.find((a) => a.startsWith('--extra=')) || '').slice(8);
 fs.mkdirSync(OUT, { recursive: true });
 
 // 1) 近況の下地: PC版で集めた 2025年10〜12月の結果（あれば）
 const hist = new History();
 const warm = path.join(ROOT, 'data', 'warmup');
 // Open API に2025年以前の日があれば、そちらを使う（PC版の下地と重ならないように）
-const hasOldOpenApi = fs.readdirSync(path.join(ROOT, 'data', 'openapi')).some((y) => y < '2026');
+const hasOldOpenApi = EXTRA || fs.readdirSync(path.join(ROOT, 'data', 'openapi')).some((y) => y < '2026');
 if (fs.existsSync(warm) && !hasOldOpenApi) {
   for (const fn of fs.readdirSync(warm).filter((x) => x.endsWith('.jsonl.gz')).sort()) {
     const lines = zlib.gunzipSync(fs.readFileSync(path.join(warm, fn))).toString('utf8').split('\n').filter(Boolean);
@@ -25,10 +27,19 @@ if (fs.existsSync(warm) && !hasOldOpenApi) {
 }
 
 // 2) Open API の日別データを日付順に
-const files = [];
+let files = [];
 const base = path.join(ROOT, 'data', 'openapi');
 for (const y of fs.readdirSync(base).sort()) {
   for (const fn of fs.readdirSync(path.join(base, y)).sort()) if (fn.endsWith('.json.gz')) files.push(path.join(base, y, fn));
+}
+if (EXTRA) {
+  const first = path.basename(files[0]);
+  const old = [];
+  for (const y of fs.readdirSync(EXTRA).sort()) {
+    for (const fn of fs.readdirSync(path.join(EXTRA, y)).sort()) if (fn.endsWith('.json.gz') && fn < first) old.push(path.join(EXTRA, y, fn));
+  }
+  console.error(`公式の過去データ ${old.length} 日分（${old.length ? path.basename(old[0]) : '-'} 〜）`);
+  files = [...old, ...files];
 }
 
 const ft = fs.createWriteStream(path.join(OUT, 'features.tsv'));
