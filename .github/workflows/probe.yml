@@ -1,0 +1,19 @@
+name: 外部データの確認
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: '確認するURL（空白区切り）'
+        required: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取れるか確かめる
+        run: |
+          for u in ${{ inputs.urls }}; do
+            code=$(curl -s -o /tmp/f -w '%{http_code} %{size_download} %{content_type}' -A 'Mozilla/5.0' "$u")
+            echo "$u -> $code"; head -c 200 /tmp/f | od -c | head -3
+          done
