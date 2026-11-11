@@ -33,7 +33,43 @@ export function normalizeDay(j) {
     }
   }
   out.sort(raceOrder);
+  attachToday(out);
   return out;
+}
+
+// その日の水面の流れ: 同じ日・同じ場の、2レース以上前（締切5分前には必ず結果が出ている）のレースの結果
+//   race.today = {n, c1win, outwin, makuri, st} / boat.today = {n, place, st}（その日の前のレースのその選手）
+export const TODAY_GAP = 2;
+export function attachToday(races) {
+  const byV = {};
+  for (const r of races) (byV[r.jcd] || (byV[r.jcd] = [])).push(r);
+  for (const list of Object.values(byV)) {
+    list.sort((a, b) => a.rno - b.rno);
+    for (const r of list) {
+      const prev = list.filter((x) => x.rno <= r.rno - TODAY_GAP && x.hasResult);
+      let n = 0, c1 = 0, out = 0, mk = 0; const sts = [];
+      const per = {};
+      for (const x of prev) {
+        const w = x.boats.find((b) => b.place === 1);
+        if (!w) continue;
+        n++;
+        const wc = w.course || w.exCourse || w.waku;
+        c1 += wc === 1; out += wc >= 4; mk += x.technique === 3 || x.technique === 4;
+        for (const b of x.boats) {
+          if (b.st !== null && b.st >= 0) sts.push(b.st);
+          if (b.num === null) continue;
+          const q = per[b.num] || (per[b.num] = { n: 0, place: 0, st: [] });
+          q.n++; q.place += b.place !== null ? b.place : 7;
+          if (b.st !== null && b.st >= 0) q.st.push(b.st);
+        }
+      }
+      r.today = { n, c1win: n ? c1 / n : NaN_, outwin: n ? out / n : NaN_, makuri: n ? mk / n : NaN_, st: sts.length ? sts.reduce((a, b) => a + b, 0) / sts.length : NaN_ };
+      for (const b of r.boats) {
+        const q = b.num !== null ? per[b.num] : null;
+        b.today = q ? { n: q.n, place: q.place / q.n, st: q.st.length ? q.st.reduce((a, c) => a + c, 0) / q.st.length : NaN_ } : { n: 0, place: NaN_, st: NaN_ };
+      }
+    }
+  }
 }
 
 export function raceOrder(a, b) {
@@ -134,8 +170,9 @@ export class History {
       const st = (b.st !== null && b.st >= 0) ? b.st : (b.st !== null && b.st < 0 ? -1 : null); // -1 = F
       let p = this.p[b.num];
       if (!p) p = this.p[b.num] = { r: [], c: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], v: {} };
-      p.r.push([d, race.jcd, course, place, st, relEx]);
-      if (p.r.length > 40) p.r.splice(0, p.r.length - 40);
+      const exst = Number.isFinite(b.exST) ? b.exST : null;
+      p.r.push([d, race.jcd, course, place, st, relEx, race.technique || 0, exst]);
+      if (p.r.length > 80) p.r.splice(0, p.r.length - 80);
       if (course >= 1 && course <= 6) {
         const c = p.c[course - 1];
         c[0] += 1; c[1] += place === 1; c[2] += place <= 2; c[3] += place <= 3;
@@ -155,10 +192,11 @@ export class History {
   // その日のレース用の近況（d より前の結果だけを使う）
   racer(num, d, jcd) {
     const p = this.p[num];
-    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null, exRel: NaN_ };
+    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null, exRel: NaN_, tk: null };
     if (!p) return out;
     const recs = p.r.filter((r) => r[0] < d);
     if (!recs.length) return out;
+    out.tk = techStats(recs);
     const last10 = recs.slice(-10);
     const fins = last10.map((r) => r[3]);
     out.n90 = recs.filter((r) => d - r[0] <= 90).length;
@@ -230,11 +268,27 @@ export class History {
 }
 
 const round4 = (x) => (Number.isFinite(x) ? Math.round(x * 1e6) / 1e6 : null);
+
+// 決まり手とスタートの癖（直近80走）: [まくり勝ち率, 差し勝ち率(2コース以上の出走あたり), 1コースでまくられた率, 差された率, 1コース出走数,
+//   本番ST−展示ST の平均, コース別の本番ST 1〜6]
+function techStats(recs) {
+  let n2 = 0, mk = 0, sa = 0, n1 = 0, l1m = 0, l1s = 0; const bias = []; const sc = [[], [], [], [], [], []];
+  for (const r of recs) {
+    const c = r[2], place = r[3], st = r[4], tech = r[6] || 0, exst = r[7];
+    if (c >= 2) { n2++; if (place === 1) { mk += tech === 3 || tech === 4; sa += tech === 2; } }
+    if (c === 1) { n1++; if (place !== 1) { l1m += tech === 3 || tech === 4; l1s += tech === 2; } }
+    if (st !== null && st >= 0 && exst !== null && exst !== undefined && exst >= 0) bias.push(st - exst);
+    if (st !== null && st >= 0 && c >= 1 && c <= 6) sc[c - 1].push(st);
+  }
+  const avg = (a) => (a.length >= 2 ? a.reduce((x, y) => x + y, 0) / a.length : NaN_);
+  return [shrink(mk, n2, 0.04, 10), shrink(sa, n2, 0.04, 10), shrink(l1m, n1, 0.08, 5), shrink(l1s, n1, 0.08, 5), n1,
+    bias.length >= 3 ? bias.reduce((x, y) => x + y, 0) / bias.length : NaN_, ...sc.map(avg)];
+}
 function compactRacer(x, jcd) {
   const v = {}; v[jcd] = [round4(x.venueWin), x.setsuN, round4(x.setsuAvg)];
   return {
     a: [round4(x.n90), round4(x.avgFin), round4(x.win10), round4(x.top3_10), round4(x.daysOff), round4(x.stAvg), round4(x.stStd), round4(x.f180), round4(x.exRel)],
-    c: x.course, v,
+    c: x.course, v, k: x.tk ? x.tk.map(round4) : null,
   };
 }
 
@@ -243,11 +297,12 @@ export class Snapshot {
   constructor(snap) { this.s = snap || { r: {}, m: {} }; }
   racer(num, d, jcd) {
     const x = this.s.r[num];
-    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null, exRel: NaN_ };
+    const out = { n90: NaN_, avgFin: NaN_, win10: NaN_, top3_10: NaN_, venueWin: NaN_, setsuAvg: NaN_, setsuN: 0, daysOff: NaN_, stAvg: NaN_, stStd: NaN_, f180: NaN_, course: null, exRel: NaN_, tk: null };
     if (!x) return out;
     const f = (v) => (v === null || v === undefined ? NaN_ : v);
     [out.n90, out.avgFin, out.win10, out.top3_10, out.daysOff, out.stAvg, out.stStd, out.f180, out.exRel] = [...x.a, null].slice(0, 9).map(f);
     out.course = x.c || null;
+    out.tk = x.k ? x.k.map(f) : null;
     const v = (x.v || {})[jcd];
     if (v) { out.venueWin = f(v[0]); out.setsuN = v[1] || 0; out.setsuAvg = f(v[2]); }
     else { out.venueWin = 1 / 6; out.setsuN = 0; out.setsuAvg = NaN_; }
@@ -281,6 +336,12 @@ export const FEATURES = [
   'pN90', 'pAvgFin', 'pWin10', 'pTop3', 'pCourseWin', 'pCourseTop2', 'pCourseTop3', 'pCourseN', 'pVenueWin',
   'pSetsuAvg', 'pSetsuN', 'pDaysOff', 'pSTavg', 'pSTstd', 'pF180', 'stEst', 'stEstRank', 'stEstVsInner', 'stEstVsOuter',
   'mAvgFin', 'mWin', 'mN', 'pAvgFinRank', 'pCourseWinRank',
+  // 決まり手の履歴（攻める力・1コースで守る力）
+  'atkMakuri', 'atkSashi', 'c1LostMakuri', 'c1LostSashi', 'c1DefN', 'outerAtkMakuri', 'innerAtkSashi',
+  // 本番のスタートの癖
+  'pStCourse', 'pStBias', 'stPred', 'stPredRank', 'stPredVsInner', 'stPredVsOuter',
+  // その日の水面の流れ・選手のその日の調子（2レース以上前まで）
+  'tdN', 'tdC1Win', 'tdOutWin', 'tdMakuri', 'tdST', 'tdRacerN', 'tdRacerPlace', 'tdRacerST',
 ];
 // 試して採用しなかった材料（2026-11: 2連単の当たり具合はわずかに良くなったが、回収率は買い方によって上下し、はっきり良くならなかった）:
 //   普段の展示の出方（選手・モーターごとの展示タイムのレース内平均との差の平均）と今日の展示との差
@@ -346,6 +407,17 @@ export function buildFeatures(race, hist, vc) {
   const pAvgFin = hx.map((h) => (h ? h.avgFin : NaN_));
   const pCourseWin = pCourse.map((p) => p[0]);
 
+  // 決まり手・スタートの癖
+  const tk = hx.map((h) => (h && h.tk ? h.tk : null));
+  const tkv = (i, j) => (tk[i] && Number.isFinite(tk[i][j]) ? tk[i][j] : NaN_);
+  const pStCourse = boats.map((b, i) => tkv(i, 6 + course[i] - 1));
+  const pStBias = boats.map((b, i) => tkv(i, 5));
+  const stPred = boats.map((b, i) => {
+    if (Number.isFinite(exSTok[i]) && Number.isFinite(pStBias[i])) return exSTok[i] + pStBias[i];
+    if (Number.isFinite(pStCourse[i])) return pStCourse[i];
+    return stEst[i];
+  });
+  const stPredRank = rankOf(stPred, true);
   const exTimeRank = rankOf(exTime, true);
   const exSTRank = rankOf(exSTforRank, true);
   const natWinRank = rankOf(natWin, false);
@@ -404,6 +476,16 @@ export function buildFeatures(race, hist, vc) {
       stEstVsInner: wi !== undefined ? stEst[i] - stEst[wi] : NaN_,
       stEstVsOuter: wo !== undefined ? stEst[i] - stEst[wo] : NaN_,
       mAvgFin: m.avgFin, mWin: m.win, mN: m.n, pAvgFinRank: pAvgFinRank[i], pCourseWinRank: pCourseWinRank[i],
+      atkMakuri: tkv(i, 0), atkSashi: tkv(i, 1), c1LostMakuri: c1 !== undefined ? tkv(c1, 2) : NaN_, c1LostSashi: c1 !== undefined ? tkv(c1, 3) : NaN_,
+      c1DefN: c1 !== undefined ? tkv(c1, 4) : NaN_,
+      outerAtkMakuri: maxOf(boats.map((_, k) => (course[k] > c ? tkv(k, 0) : NaN_))),
+      innerAtkSashi: maxOf(boats.map((_, k) => (course[k] < c && course[k] >= 2 ? tkv(k, 1) : NaN_))),
+      pStCourse: pStCourse[i], pStBias: pStBias[i], stPred: stPred[i], stPredRank: stPredRank[i],
+      stPredVsInner: wi !== undefined ? stPred[i] - stPred[wi] : NaN_,
+      stPredVsOuter: wo !== undefined ? stPred[i] - stPred[wo] : NaN_,
+      tdN: race.today ? race.today.n : 0, tdC1Win: race.today ? race.today.c1win : NaN_, tdOutWin: race.today ? race.today.outwin : NaN_,
+      tdMakuri: race.today ? race.today.makuri : NaN_, tdST: race.today ? race.today.st : NaN_,
+      tdRacerN: b.today ? b.today.n : 0, tdRacerPlace: b.today ? b.today.place : NaN_, tdRacerST: b.today ? b.today.st : NaN_,
       pExRel: f(h.exRel), mExRel: f(m.exRel),
       exRelVsOwn: exTime[i] - exTimeMean - f(h.exRel), exRelVsMotor: exTime[i] - exTimeMean - f(m.exRel),
       exRelVsBoth: exTime[i] - exTimeMean - f(h.exRel) - f(m.exRel),
