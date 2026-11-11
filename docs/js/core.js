@@ -728,7 +728,8 @@ export function evPicks(pr, race, rule, kind) {
   const all = Object.entries(P).map(([combo, p]) => { const o = om[combo]; return { combo, p, odds: o, ev: o ? p * o : 0, edge: o > 0 && zi > 0 ? p / (1 / o / zi) : 0 }; })
     .filter((x) => x.odds > 0).sort((x, y) => y.ev - x.ev);
   // 期待値の高い順に k 点の中から、条件に合うものだけ（research_exacta.py と同じ選び方）
-  const picks = all.slice(0, rule.k || 3).filter((x) => x.ev >= rule.t && x.p >= (rule.minp || 0) && x.odds <= (rule.maxo || 1e9) && x.odds > (rule.mino || 0) && x.edge >= (rule.edge || 0));
+  const picks = all.slice(0, rule.k || 3).filter((x) => x.ev >= rule.t && x.p >= (rule.minp || 0) && x.odds <= (rule.maxo || 1e9) && x.odds > (rule.mino || 0) && x.edge >= (rule.edge || 0)
+    && (!rule.h1 || x.combo.startsWith('1-'))); // h1: 1号艇が1着の買い目だけ（tools/fair_eval.py --universe h1）
   return { picks, top: all.slice(0, 5), alpha };
 }
 

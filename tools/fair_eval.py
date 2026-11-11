@@ -41,9 +41,10 @@ MAXK = [1, 2, 3]
 EDGE = [1.0, 1.2]
 
 
-def rule_list():
-    return [dict(t=t, minp=mp, maxo=mo, mino=mi, k=k, edge=ed) for t, mp, mo, mi, k, ed in itertools.product(EV_T, MINP, MAXO, MINO, MAXK, EDGE)
-            if not (ed > 1 and t > 1.2) and mi < mo]
+def rule_list(h1=False):
+    """h1=True: 期待値の高い k 点のうち、1号艇が1着の買い目だけ（1号艇が負けるレースは市場のほうが正確なため）"""
+    return [dict(t=t, minp=mp, maxo=mo, mino=mi, k=k, edge=ed, **({"h1": 1} if h1 else {}))
+            for t, mp, mo, mi, k, ed in itertools.product(EV_T, MINP, MAXO, MINO, MAXK, EDGE) if not (ed > 1 and t > 1.2) and mi < mo]
 
 
 def masks(prob, odds, valid, rules):
@@ -55,8 +56,10 @@ def masks(prob, odds, valid, rules):
     base = valid[:, None] & np.isfinite(o)
     rank = np.argsort(np.argsort(-ev, 1), 1)
     on = np.nan_to_num(o, nan=0)
+    head1 = np.arange(odds.shape[1]) < 5   # 2連単の並び: 1着 a・2着 b → a*5 + …
     for r in rules:
-        yield base & (ev >= r["t"]) & (prob >= r["minp"]) & (on <= r["maxo"]) & (on > r["mino"]) & (rank < r["k"]) & (edge >= r["edge"])
+        m = base & (ev >= r["t"]) & (prob >= r["minp"]) & (on <= r["maxo"]) & (on > r["mino"]) & (rank < r["k"]) & (edge >= r["edge"])
+        yield m & head1 if r.get("h1") else m
 
 
 def label(r):
@@ -66,7 +69,7 @@ def label(r):
     if r["edge"] > 1:
         s += f"・市場の{r['edge']}倍以上"
     s += f"・{r['mino']:g}倍超〜{r['maxo']:g}倍" if r["mino"] else f"・{r['maxo']:g}倍以下"
-    return s + f"・{r['k']}点まで"
+    return s + f"・{r['k']}点まで" + ("・1号艇が1着のみ" if r.get("h1") else "")
 
 
 def main():
@@ -76,6 +79,7 @@ def main():
     ap.add_argument("--first-test", default="2026-03", help="答え合わせを始める月（それより前は選ぶためだけに使う）")
     ap.add_argument("--min-bets-per-month", type=int, default=250)
     ap.add_argument("--out", default=str(ROOT / "docs" / "data" / "fair.json"))
+    ap.add_argument("--universe", default="all", choices=["all", "h1"], help="買い方の系統: all=今まで通り / h1=1号艇が1着の買い目だけ")
     a = ap.parse_args()
     files = sorted(Path(a.preds).rglob("fair_*.pkl"))
     M = [pickle.load(open(f, "rb")) for f in files]
@@ -97,9 +101,12 @@ def main():
         combos[f"[試] {k}＋展示0.15"] = {k: 0.85, "ce": 0.15}
         combos[f"[試] {k}＋展開（大きめ）"] = {k: 0.5, "tenkai_big": 0.5}
 
-    rules = rule_list()
+    rules = rule_list() + rule_list(h1=True)
     cands = [(cn, i) for cn in combos for i in range(len(rules))]
-    is_base = np.array([not cn.startswith("[試]") for cn, _ in cands])   # 試しの予想は比べるだけ（実際の買い方を選ぶ候補には入れない）
+    is_h1 = np.array([bool(rules[i].get("h1")) for _, i in cands])
+    # 試しの予想は比べるだけ（実際の買い方を選ぶ候補には入れない）。「1号艇が1着のみ」は別の買い方の系統として比べる（--universe h1 で本番に）
+    is_real = np.array([not cn.startswith("[試]") for cn, _ in cands])
+    is_base = is_real & (is_h1 if a.universe == "h1" else ~is_h1)
     stats = np.zeros((len(cands), len(M), 3))        # 点数・払戻合計・払戻の2乗合計（100円あたり）
     D = []
     for mi, b in enumerate(M):
@@ -137,6 +144,22 @@ def main():
                         "prior": {"bets": int(n[best]), "roi": round(float(roi[best]), 4), "se": round(float(se[best]), 4)},
                         "test": {"bets": int(mask.sum()), "hits": int((x > 0).sum()), "roi": round(float(x.mean()), 4) if len(x) else None}})
         log(f"{m}: 選んだ {cn}・{label(rule)}（それまで {roi[best]:.3f}±{se[best]:.3f} {int(n[best])}点）→ この月 {x.mean() if len(x) else float('nan'):.3f}（{len(x)}点）")
+    # もう一方の系統でも同じ選び方をして、合計だけ比べる
+    other = is_real & (~is_h1 if a.universe == "h1" else is_h1)
+    ob = []
+    for mi, m in enumerate(months):
+        if m < a.first_test:
+            continue
+        n, s, s2 = stats[:, :mi, 0].sum(1), stats[:, :mi, 1].sum(1), stats[:, :mi, 2].sum(1)
+        roi = np.where(n > 0, s / np.maximum(n, 1), 0)
+        se = np.sqrt(np.maximum(s2 / np.maximum(n, 1) - roi ** 2, 0) / np.maximum(n, 1))
+        j = int(np.argmax(np.where((n >= a.min_bets_per_month * mi) & other, roi - se, -9)))
+        cn, ri = cands[j]; d = D[mi]
+        mk_ = next(masks(d["probs"][cn], d["eo"], d["has"], [rules[ri]])); xx = d["pay"][mk_]
+        ob.append((m, cn, label(rules[ri]), len(xx), float(xx.sum())))
+        log(f"  [比較 {'今まで通り' if a.universe == 'h1' else '1号艇1着のみ'}] {m}: {cn}・{label(rules[ri])} → {xx.mean() if len(xx) else float('nan'):.3f}（{len(xx)}点）")
+    tb = sum(o[3] for o in ob)
+    log(f"比較の系統の合計: {sum(o[4] for o in ob) / max(tb, 1):.4f}（{tb}点）")
     x = np.array([v for _, v in bets_all])
     days = np.array([d for d, _ in bets_all])
     rng = np.random.default_rng(0)
@@ -186,7 +209,7 @@ def main():
     # 予想の混ぜ方ごとの公平な成績（その月より前で買い方を選んだ場合）
     by_prob = {}
     for cn in combos:
-        idx = [i for i, c in enumerate(cands) if c[0] == cn]
+        idx = [i for i, c in enumerate(cands) if c[0] == cn and is_h1[i] == (a.universe == "h1")]
         xs = []
         for mi, m in enumerate(months):
             if m < a.first_test:
