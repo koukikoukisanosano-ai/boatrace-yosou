@@ -185,16 +185,23 @@ def main():
             j = idx[int(np.argmax(np.where(nn >= a.min_bets_per_month * mi, rr - ee, -9)))]
             xs.append(stats[j, mi])
         xs = np.array(xs); tb = xs[:, 0].sum()
-        lls = []
+        lls, gap1, gapo = [], [], []
         for mi, m in enumerate(months):
             if m < a.first_test:
                 continue
-            b = M[mi]; e = D[mi]["probs"][cn]
+            b = M[mi]; e = D[mi]["probs"][cn]; eo = D[mi]["eo"]
             order = np.argsort(np.where(b["present"], b["place"], 99), 1)[:, :2]
             okk = (np.take_along_axis(b["place"], order, 1) == [1, 2]).all(1)
             tr = order[:, 0] * 5 + order[:, 1] - (order[:, 1] > order[:, 0])
-            lls.append(-np.log(np.clip(e[np.arange(len(e)), tr], 1e-12, 1))[okk])
-        by_prob[cn] = {"bets": int(tb), "roi": round(float(xs[:, 1].sum() / max(tb, 1)), 4), "logloss": round(float(np.concatenate(lls).mean()), 4)}
+            ll = -np.log(np.clip(e[np.arange(len(e)), tr], 1e-12, 1))
+            lls.append(ll[okk])
+            # 市場（確定オッズ）との差を、1号艇が勝ったレースとそれ以外で（正 = 市場のほうが正確）
+            inv = np.where(np.isfinite(eo) & (eo > 0), 1 / eo, 0); mk = inv / np.maximum(inv.sum(1, keepdims=True), 1e-12)
+            llm = -np.log(np.clip(mk[np.arange(len(mk)), tr], 1e-12, 1))
+            okm = okk & (np.isfinite(eo).sum(1) >= 25)
+            gap1.append((ll - llm)[okm & (order[:, 0] == 0)]); gapo.append((ll - llm)[okm & (order[:, 0] != 0)])
+        by_prob[cn] = {"bets": int(tb), "roi": round(float(xs[:, 1].sum() / max(tb, 1)), 4), "logloss": round(float(np.concatenate(lls).mean()), 4),
+                       "gap_win1": round(float(np.concatenate(gap1).mean()), 4), "gap_win_other": round(float(np.concatenate(gapo).mean()), 4)}
     log("混ぜ方ごと（公平）:", json.dumps(by_prob, ensure_ascii=False))
     out = {"next": nxt, "by_prob": by_prob, "months": results, "total": total, "reference_current_rule": ref, "first_test": a.first_test,
            "daily": [[dd, int(len(bd[dd])), round(float(bd[dd].sum()), 2)] for dd in ud]}
