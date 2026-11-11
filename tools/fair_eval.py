@@ -78,6 +78,7 @@ def main():
     ap.add_argument("--work", required=True)
     ap.add_argument("--first-test", default="2026-03", help="答え合わせを始める月（それより前は選ぶためだけに使う）")
     ap.add_argument("--min-bets-per-month", type=int, default=250)
+    ap.add_argument("--min-odds", type=float, default=0.0, help="この倍率以下は買わない（買い方の候補を「◯倍超」のものだけにする）")
     ap.add_argument("--out", default=str(ROOT / "docs" / "data" / "fair.json"))
     ap.add_argument("--universe", default="all", choices=["all", "h1"], help="買い方の系統: all=今まで通り / h1=1号艇が1着の買い目だけ")
     a = ap.parse_args()
@@ -101,7 +102,7 @@ def main():
         combos[f"[試] {k}＋展示0.15"] = {k: 0.85, "ce": 0.15}
         combos[f"[試] {k}＋展開（大きめ）"] = {k: 0.5, "tenkai_big": 0.5}
 
-    rules = rule_list() + rule_list(h1=True)
+    rules = [r for r in rule_list() + rule_list(h1=True) if r["mino"] >= a.min_odds]
     cands = [(cn, i) for cn in combos for i in range(len(rules))]
     is_h1 = np.array([bool(rules[i].get("h1")) for _, i in cands])
     # 試しの予想は比べるだけ（実際の買い方を選ぶ候補には入れない）。「1号艇が1着のみ」は別の買い方の系統として比べる（--universe h1 で本番に）
