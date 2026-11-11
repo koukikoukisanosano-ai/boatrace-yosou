@@ -28,7 +28,7 @@ TECH = {"逃げ": 1, "差し": 2, "まくり": 3, "まくり差し": 4, "抜き"
 WIND_DIR = {"北": 1, "北北東": 2, "北東": 3, "東北東": 4, "東": 5, "東南東": 6, "南東": 7, "南南東": 8, "南": 9, "南南西": 10, "南西": 11,
             "西南西": 12, "西": 13, "西北西": 14, "北西": 15, "北北西": 16, "無風": 17}
 WEATHER = {"晴": 1, "曇り": 2, "曇": 2, "雨": 3, "雪": 4, "霧": 6}
-PAYKEY = {"単勝": "win", "複勝": "place", "２連単": "exacta", "２連複": "quinella", "拡連複": "quinella_place", "３連単": "trifecta", "３連複": "trio"}
+PAYKEY = {"単勝": "win", "複勝": "place", "2連単": "exacta", "2連複": "quinella", "拡連複": "quinella_place", "3連単": "trifecta", "3連複": "trio"}
 
 
 def z2h(s: str) -> str:
@@ -47,7 +47,7 @@ RE_K_HEAD = re.compile(r"^(\d\d)KBGN")
 RE_K_DATE = re.compile(r"(\d{4})/\s*(\d+)/\s*(\d+)")
 RE_K_RACE = re.compile(r"^\s+(\d+)R\s+(.+?)\s+H(\d+)m\s+(\S+)\s+風\s+(\S+)\s+(\d+)m\s+波\s+(\d+)cm")
 RE_K_BOAT = re.compile(r"^\s+(\d\d|[FLKS]\d?|欠|転|落|沈|妨|エ|不)\s+([1-6])\s+(\d{4})\s(.{8})(.*)$")
-RE_K_PAY = re.compile(r"^\s+(単勝|複勝|２連単|２連複|拡連複|３連単|３連複)?\s+([\d\-=]+)\s+(\d+)(.*)$")
+RE_K_PAY = re.compile(r"^\s+(単勝|複勝|2連単|2連複|拡連複|3連単|3連複)?\s+([\d\-=]+)\s+(\d+)(.*)$")   # 全体を半角にしてから読む
 
 
 def tech_of(s: str):
@@ -131,7 +131,8 @@ def parse_k(text: str) -> dict:
 RE_B_HEAD = re.compile(r"^(\d\d)BBGN")
 RE_B_DATE = re.compile(r"(\d{4})年\s*(\d+)月\s*(\d+)日")
 RE_B_RACE = re.compile(r"^\s*(\d+)R\s+(.*?)\s+H(\d+)m.*?(\d+):(\d+)")
-RE_B_BOAT = re.compile(r"^([1-6]) (\d{4})(.{4})(\d{2})(.{2})(\d{2})([AB][12])\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+([\d.]+)")
+RATE = r"\s*(\d{1,3}\.\d\d)"   # 桁があふれると前とくっつく（例 25.00110 = 2率25.00・ボート110）
+RE_B_BOAT = re.compile(r"^([1-6]) (\d{4})(.{4})(\d{2})(.{2})(\d{2})([AB][12])" + RATE * 4 + r"\s*(\d{1,3})" + RATE + r"\s*(\d{1,3})" + RATE)
 
 
 def parse_b(text: str) -> dict:
