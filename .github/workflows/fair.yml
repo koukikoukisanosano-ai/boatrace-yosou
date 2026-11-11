@@ -65,7 +65,7 @@ jobs:
         run: |
           mkdir -p data/mbrace
           for y in ${{ inputs.mbrace }}; do gh release download mbrace-data -p "mbrace_$y.tar" -O - | tar xf - -C data/mbrace; done
-          echo "EXTRA=--extra=data/mbrace" >> "$GITHUB_ENV"
+          echo "EXTRA=--extra=data/mbrace --rows-from=${{ inputs.train_from || '2024-11-01' }}" >> "$GITHUB_ENV"
       - name: 学習用の表
         run: node --max-old-space-size=10240 tools/build_dataset.mjs work/full $EXTRA
       - name: その月より前だけで学習して、その月を予想

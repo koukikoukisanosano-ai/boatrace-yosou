@@ -42,8 +42,13 @@ if (EXTRA) {
   files = [...old, ...files];
 }
 
-const ft = fs.createWriteStream(path.join(OUT, 'features.tsv'));
-const rj = fs.createWriteStream(path.join(OUT, 'races.jsonl'));
+// 書き出しは同期（ストリームだと全部メモリにたまり、大きいと書き出しで失敗する）
+const ROWS_FROM = (process.argv.find((a) => a.startsWith('--rows-from=')) || '').slice(12); // これより前の日は近況だけに使い、行は書かない
+const syncOut = (p) => { const fd = fs.openSync(p, 'w'); let buf = []; let n = 0;
+  const flush = () => { if (buf.length) { fs.writeSync(fd, buf.join('')); buf = []; n = 0; } };
+  return { write: (s) => { buf.push(s); n += s.length; if (n > 8e6) flush(); }, end: () => { flush(); fs.closeSync(fd); } }; };
+const ft = syncOut(path.join(OUT, 'features.tsv'));
+const rj = syncOut(path.join(OUT, 'races.jsonl'));
 ft.write(['race', 'date', 'place', 'preview', ...FEATURES].join('\t') + '\n');
 let nRaces = 0; let nRows = 0;
 const fmt = (v) => (Number.isFinite(v) ? String(v) : ''); // 丸めない（予想ページと同じ値で学習するため）
@@ -56,6 +61,7 @@ for (const file of files) {
   const snap = new Snapshot(JSON.parse(JSON.stringify(hist.snapshotFor(races))));
   for (const race of races) {
     if (race.preview === 'none') continue; // 直前情報が無いレースは学習に使わない
+    if (ROWS_FROM && race.date < ROWS_FROM) continue;
     const { boats, X } = buildFeatures(NO_PREVIEW ? { ...race, preview: 'none' } : race, snap, null);
     if (boats.length < 5) continue;
     boats.forEach((b, i) => {
