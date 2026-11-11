@@ -1,0 +1,61 @@
+name: 過去データ（公式の番組表・競走成績）を取り込む
+
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: '年（空白区切り）。2024 は 8月まで（9月からは Open API）'
+        default: '2020 2021 2022 2023 2024'
+      test:
+        description: '確かめるだけ（例 2023-05-01:2023-05-31）。指定すると年は無視して保存もしない'
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      years: ${{ steps.y.outputs.years }}
+    steps:
+      - id: y
+        run: |
+          if [ -n "${{ inputs.test }}" ]; then echo 'years=["test"]' >> "$GITHUB_OUTPUT"; else
+          echo "years=$(echo '${{ inputs.years }}' | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read().split()))')" >> "$GITHUB_OUTPUT"; fi
+
+  fetch:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        year: ${{ fromJson(needs.plan.outputs.years) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          sudo apt-get install -y -q lhasa > /dev/null
+          pip install -q requests
+      - name: 取り込む
+        run: |
+          if [ "${{ matrix.year }}" = "test" ]; then
+            IFS=: read A B <<< "${{ inputs.test }}"
+          else
+            A=${{ matrix.year }}-01-01; B=${{ matrix.year }}-12-31
+            [ "${{ matrix.year }}" = "2024" ] && B=2024-08-31
+          fi
+          python tools/mbrace.py --from "$A" --to "$B" --out mbrace
+          du -sh mbrace
+      - name: 保存（リリース mbrace-data に年ごとの tar）
+        if: matrix.year != 'test'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar cf mbrace_${{ matrix.year }}.tar -C mbrace ${{ matrix.year }}
+          gh release view mbrace-data >/dev/null 2>&1 || gh release create mbrace-data --title '過去データ（公式）' --notes '番組表・競走成績を Open API の形にしたもの（tools/mbrace.py）' || true
+          gh release upload mbrace-data mbrace_${{ matrix.year }}.tar --clobber
