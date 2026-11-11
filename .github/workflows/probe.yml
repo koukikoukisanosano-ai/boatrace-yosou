@@ -6,6 +6,9 @@ on:
       urls:
         description: '確認するURL（空白区切り）'
         required: true
+      lines:
+        description: '表示する行数'
+        default: '0'
 
 jobs:
   probe:
@@ -13,7 +16,11 @@ jobs:
     steps:
       - name: 取れるか確かめる
         run: |
+          sudo apt-get install -y -q lhasa nkf > /dev/null
           for u in ${{ inputs.urls }}; do
             code=$(curl -s -o /tmp/f -w '%{http_code} %{size_download} %{content_type}' -A 'Mozilla/5.0' "$u")
-            echo "$u -> $code"; head -c 200 /tmp/f | od -c | head -3
+            echo "$u -> $code"
+            if [ "${{ inputs.lines }}" != "0" ]; then
+              rm -rf /tmp/x && mkdir /tmp/x && cd /tmp/x && lha xq /tmp/f && for t in *; do echo "== $t"; nkf -w "$t" | head -n ${{ inputs.lines }}; done; cd -
+            fi
           done
