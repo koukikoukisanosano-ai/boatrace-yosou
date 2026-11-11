@@ -163,6 +163,18 @@ def main():
             mask = next(masks(d["probs"][fixed["prob"]], d["eo"], d["has"], [fr]))
             xx = d["pay"][mask]; tb += len(xx); tr_ += xx.sum(); mon.append(round(float(xx.mean()), 2) if len(xx) else None)
         log(f"参考 {label(fr)}: 合計 {tr_ / max(tb, 1):.3f}（{tb}点） 月別 {mon}")
+    # 参考: 今の買い方の、1着に選んだ艇ごとの成績（1号艇が頭か、それ以外か）
+    fr = dict(t=1.5, minp=0.07, maxo=30.0, mino=10.0, k=1, edge=1.0)
+    for prob in (fixed["prob"],):
+        agg = {}
+        for mi, m in enumerate(months):
+            d = D[mi]
+            mask = next(masks(d["probs"][prob], d["eo"], d["has"], [fr]))
+            for head in range(6):
+                hm = mask.copy(); hm[:, [k for k in range(30) if k // 5 != head]] = False
+                xx = d["pay"][hm]
+                a_ = agg.setdefault(head + 1, [0, 0.0, 0]); a_[0] += len(xx); a_[1] += xx.sum(); a_[2] += int((xx > 0).sum())
+        log("参考 頭（1着）ごと:", {h: f"{v[1] / max(v[0], 1):.3f}（{v[0]}点・{v[2]}当）" for h, v in agg.items()})
     # 次の月に使う買い方: 全部の月の成績で選ぶ（公平な検証と同じ選び方）
     n, s_, s2 = stats[:, :, 0].sum(1), stats[:, :, 1].sum(1), stats[:, :, 2].sum(1)
     roi = np.where(n > 0, s_ / np.maximum(n, 1), 0)
