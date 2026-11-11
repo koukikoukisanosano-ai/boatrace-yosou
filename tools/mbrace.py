@@ -46,7 +46,7 @@ def num(s):
 RE_K_HEAD = re.compile(r"^(\d\d)KBGN")
 RE_K_DATE = re.compile(r"(\d{4})/\s*(\d+)/\s*(\d+)")
 RE_K_RACE = re.compile(r"^\s+(\d+)R\s+(.+?)\s+H(\d+)m\s+(\S+)\s+風\s+(\S+)\s+(\d+)m\s+波\s+(\d+)cm")
-RE_K_BOAT = re.compile(r"^\s+(\S+)\s+([1-6])\s+(\d{4})\s(.{8})(.*)$")
+RE_K_BOAT = re.compile(r"^\s+(\d\d|[FLKS]\d?|欠|転|落|沈|妨|エ|不)\s+([1-6])\s+(\d{4})\s(.{8})(.*)$")
 RE_K_PAY = re.compile(r"^\s+(単勝|複勝|２連単|２連複|拡連複|３連単|３連複)?\s+([\d\-=]+)\s+(\d+)(.*)$")
 
 
@@ -221,11 +221,32 @@ def fetch_lzh(s: requests.Session, kind: str, d: date) -> str | None:
     return None
 
 
+def debug(bt: str, kt: str):
+    print("== K の見出し行")
+    for ln in sorted({ln for ln in kt.splitlines() if "レースタイム" in ln})[:8]:
+        print(repr(ln))
+    print("== K で読めなかった、艇らしい行")
+    for ln in [ln for ln in kt.splitlines() if re.match(r"^\s+\S+\s+[1-6]\s+\d{4}", ln) and not RE_K_BOAT.match(ln)][:10]:
+        print(repr(ln))
+    print("== B の場ごとの見出し・読めなかった行")
+    cur = None
+    for ln in bt.splitlines():
+        if RE_B_HEAD.match(ln):
+            cur = ln
+        if "ボートレース" in ln and ("年" in ln or "日" in ln):
+            print(repr(ln))
+    for ln in [ln for ln in bt.splitlines() if re.match(r"^[1-6] \d{4}", ln) and not RE_B_BOAT.match(ln)][:15]:
+        print("x", repr(ln))
+    for ln in [ln for ln in bt.splitlines() if "締切" in ln and not RE_B_RACE.match(z2h(ln))][:5]:
+        print("r", repr(ln))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--from", dest="start", required=True)
     ap.add_argument("--to", dest="end", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--debug", action="store_true", help="読めなかった行を表示する")
     ap.add_argument("--parse-only", nargs=2, metavar=("B.txt", "K.txt"), help="展開済みのテキストを読む（確認用）")
     a = ap.parse_args()
     if a.parse_only:
@@ -241,6 +262,8 @@ def main():
         out = Path(a.out, f"{d:%Y}", f"{d:%Y%m%d}.json.gz")
         if not out.exists():
             bt, kt = fetch_lzh(s, "B", d), fetch_lzh(s, "K", d)
+            if a.debug and d == date.fromisoformat(a.start):
+                debug(bt or "", kt or "")
             if bt or kt:
                 j = to_openapi(parse_b(bt or ""), parse_k(kt or ""))
                 for sv in j["programs"]["stadiums"].values():

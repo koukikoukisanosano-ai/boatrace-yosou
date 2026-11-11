@@ -49,7 +49,7 @@ jobs:
             A=${{ matrix.year }}-01-01; B=${{ matrix.year }}-12-31
             [ "${{ matrix.year }}" = "2024" ] && B=2024-08-31
           fi
-          python tools/mbrace.py --from "$A" --to "$B" --out mbrace
+          python tools/mbrace.py --from "$A" --to "$B" --out mbrace $([ "${{ matrix.year }}" = "test" ] && echo --debug)
           du -sh mbrace
       - name: 保存（リリース mbrace-data に年ごとの tar）
         if: matrix.year != 'test'
