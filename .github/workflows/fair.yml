@@ -101,7 +101,7 @@ jobs:
       - name: 月ごとに、それより前だけで選んだ買い方で答え合わせ
         run: python tools/fair_eval.py --preds fair --work work/full --min-odds 10 | tee fair.log   # 10倍以下は買わない
       - name: 保存（試しの検証のときは保存しない）
-        if: inputs.mbrace == '' && inputs.variants == '' && inputs.train_from == ''
+        if: inputs.mbrace == '' && inputs.variants == '' && inputs.train_from == '' && inputs.months == ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
