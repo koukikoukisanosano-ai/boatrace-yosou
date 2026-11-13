@@ -5,11 +5,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          for hd in 20250115 20230610 20200301; do
-            u="https://www.boatrace.jp/owpc/pc/race/odds2tf?rno=1&jcd=12&hd=$hd"
-            curl -sS -A "boatrace-yosou/1.0" "$u" -o p.html -w "$hd %{http_code} %{size_download}\n"
-            grep -o 'oddsPoint[^<]*<' p.html | head -8 | tr '\n' ' '; echo
-            grep -o '締切時[^<]*\|確定[^<]*\|オッズ更新[^<]*\|データはありません[^<]*' p.html | head -5
-            sleep 2
-          done
-          curl -sS https://www.boatrace.jp/robots.txt
+          curl -sS -A "boatrace-yosou/1.0" "https://www.boatrace.jp/owpc/pc/race/odds2tf?rno=1&jcd=12&hd=20230610" -o p.html
+          python3 - <<'P'
+          s=open('p.html',encoding='utf-8').read()
+          i=s.find('2連単'); j=s.find('oddsPoint')
+          print(s[j-2500:j+1800])
+          P
+          curl -sS -A "boatrace-yosou/1.0" "https://www.boatrace.jp/owpc/pc/race/odds2tf?rno=1&jcd=12&hd=20250115" -o q.html
+          python3 -c "import re;s=open('q.html',encoding='utf-8').read();print(re.sub(r'\s+',' ',re.sub(r'<[^>]+>',' ',s))[-1500:])"
