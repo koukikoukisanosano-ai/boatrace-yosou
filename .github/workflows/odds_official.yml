@@ -35,15 +35,27 @@ jobs:
           print(f'{len(a)} レース・{n} 通り中 {same} 通りが一致')
           assert len(a) >= 30 and same >= 0.98 * n, '一致しません'
           P
-  fetch:
+  parts:
     needs: check
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.p.outputs.list }}
+    steps:
+      - id: p
+        run: |
+          python3 -c "
+          import json
+          ms = json.loads('''${{ inputs.months }}''')
+          print('list=' + json.dumps([f'{m}/{k}' for m in ms for k in (1, 2, 3)]))" >> "$GITHUB_OUTPUT"
+  fetch:
+    needs: parts
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 6
       matrix:
-        month: ${{ fromJSON(inputs.months) }}
+        part: ${{ fromJSON(needs.parts.outputs.list) }}
     env:
       PYTHONUTF8: '1'
     steps:
@@ -53,16 +65,19 @@ jobs:
           python-version: '3.12'
       - run: pip install requests
       - name: 取る
+        env:
+          PART: ${{ matrix.part }}
         run: |
-          S=${{ matrix.month }}-01
-          E=$(date -d "$S +1 month -1 day" +%F)
-          python tools/fetch_official_odds.py --from $S --to $E
+          # 1か月を3つに分ける（1〜10日・11〜20日・21日〜月末）。公式サイトの応答が1件10秒ほどかかるため
+          M=${PART%/*}; K=${PART#*/}
+          case $K in 1) S=$M-01; E=$M-10;; 2) S=$M-11; E=$M-20;; 3) S=$M-21; E=$(date -d "$M-01 +1 month -1 day" +%F);; esac
+          python tools/fetch_official_odds.py --from $S --to $E --wait 0.5
       - name: 保存
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/odds
-          git commit -q -m "公式サイトの過去オッズ ${{ matrix.month }}" || exit 0
+          git commit -q -m "公式サイトの過去オッズ ${{ matrix.part }}" || exit 0
           for i in 1 2 3 4 5 6 7 8; do
             if git pull -q --rebase && git push -q; then echo "保存しました"; exit 0; fi
             git rebase --abort 2>/dev/null || true
