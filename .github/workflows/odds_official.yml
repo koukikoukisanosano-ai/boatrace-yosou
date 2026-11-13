@@ -42,10 +42,12 @@ jobs:
       list: ${{ steps.p.outputs.list }}
     steps:
       - id: p
+        env:
+          MONTHS: ${{ inputs.months }}
         run: |
           python3 -c "
-          import json
-          ms = json.loads('''${{ inputs.months }}''')
+          import json, os
+          ms = json.loads(os.environ['MONTHS'])
           print('list=' + json.dumps([f'{m}/{k}' for m in ms for k in (1, 2, 3)]))" >> "$GITHUB_OUTPUT"
   fetch:
     needs: parts
