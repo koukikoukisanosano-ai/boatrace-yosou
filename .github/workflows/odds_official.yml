@@ -1,0 +1,71 @@
+name: 公式サイトの過去オッズ（2連単・検証用）
+
+on:
+  workflow_dispatch:
+    inputs:
+      months:
+        description: '取る月（JSON の配列。例 ["2025-01","2025-02"]）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: 確かめる（Turnmark の確定オッズがある日と比べて同じか）
+        run: |
+          ODDS_OUT=chk python tools/fetch_official_odds.py --from 2026-10-01 --to 2026-10-01 --limit 40
+          python3 - <<'P'
+          import gzip, json
+          a = json.loads(gzip.decompress(open('chk/2026/20261001.json.gz','rb').read()))
+          b = json.loads(gzip.decompress(open('data/odds/2026/20261001.json.gz','rb').read()))
+          n = same = 0
+          for k, v in a.items():
+              for x, y in zip(v['e'], b[k]['e']):
+                  n += 1; same += (x == y)
+          print(f'{len(a)} レース・{n} 通り中 {same} 通りが一致')
+          assert len(a) >= 30 and same >= 0.98 * n, '一致しません'
+          P
+  fetch:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        month: ${{ fromJSON(inputs.months) }}
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: 取る
+        run: |
+          S=${{ matrix.month }}-01
+          E=$(date -d "$S +1 month -1 day" +%F)
+          python tools/fetch_official_odds.py --from $S --to $E
+      - name: 保存
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/odds
+          git commit -q -m "公式サイトの過去オッズ ${{ matrix.month }}" || exit 0
+          for i in 1 2 3 4 5 6 7 8; do
+            if git pull -q --rebase && git push -q; then echo "保存しました"; exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 7))
+          done
+          exit 1
