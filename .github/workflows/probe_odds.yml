@@ -1,0 +1,15 @@
+name: 試し（公式サイトの過去オッズが見られるか）
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for hd in 20250115 20230610 20200301; do
+            u="https://www.boatrace.jp/owpc/pc/race/odds2tf?rno=1&jcd=12&hd=$hd"
+            curl -sS -A "boatrace-yosou/1.0" "$u" -o p.html -w "$hd %{http_code} %{size_download}\n"
+            grep -o 'oddsPoint[^<]*<' p.html | head -8 | tr '\n' ' '; echo
+            grep -o '締切時[^<]*\|確定[^<]*\|オッズ更新[^<]*\|データはありません[^<]*' p.html | head -5
+            sleep 2
+          done
+          curl -sS https://www.boatrace.jp/robots.txt
