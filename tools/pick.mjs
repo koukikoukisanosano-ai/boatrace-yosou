@@ -37,7 +37,8 @@ for (const r of races) {
   try {
     const pr = r.preview !== 'none' ? predictRace(r, model, snap) : null;
     const res = pr && rule && r.odds && r.odds.e ? evPicks(pr, r, rule, 'exacta') : null;
-    if (res) out = { ...out, state: res.picks.length ? 'buy' : 'pass', picks: res.picks.map((x) => ({ combo: x.combo, p: +x.p.toFixed(4), odds: x.odds, ev: +x.ev.toFixed(3) })) };
+    if (res) out = { ...out, state: res.picks.length ? 'buy' : 'pass', picks: res.picks.map((x) => ({ combo: x.combo, p: +x.p.toFixed(4), odds: x.odds, ev: +x.ev.toFixed(3) })),
+      probs: Object.fromEntries(Object.entries(res.probs).map(([k, v]) => [k, +v.toPrecision(4)])) };  // 30通りの確率（段階3: 確定オッズの動きの分析用）
   } catch (e) { out.error = String(e); }
   console.log(JSON.stringify(out));
 }

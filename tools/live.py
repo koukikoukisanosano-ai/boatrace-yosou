@@ -354,6 +354,8 @@ class Live:
             key = o["key"]
             final = bool((self.store["odds"].get(key) or {}).get("final"))
             self.store["picks"][key] = {"state": o["state"], "picks": o["picks"], "at": now.isoformat(timespec="seconds"), "final": final}
+            if o.get("probs"):
+                self.store["picks"][key]["probs"] = o["probs"]   # 決めた時の30通りの確率（直前情報込み）
             self.dirty = True
             if o["state"] != "buy" or not NOTIFY.get("topic"):
                 continue

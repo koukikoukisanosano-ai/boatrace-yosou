@@ -730,7 +730,7 @@ export function evPicks(pr, race, rule, kind) {
   // 期待値の高い順に k 点の中から、条件に合うものだけ（research_exacta.py と同じ選び方）
   const picks = all.slice(0, rule.k || 3).filter((x) => x.ev >= rule.t && x.p >= (rule.minp || 0) && x.odds <= (rule.maxo || 1e9) && x.odds > (rule.mino || 0) && x.edge >= (rule.edge || 0)
     && (!rule.h1 || x.combo.startsWith('1-'))); // h1: 1号艇が1着の買い目だけ（tools/fair_eval.py --universe h1）
-  return { picks, top: all.slice(0, 5), alpha };
+  return { picks, top: all.slice(0, 5), alpha, probs: P };
 }
 
 // 買い目をフォーメーションの書き方にまとめる（例: 1-3-2,4,5 → "1-3-245"）。まとめられない分はそのまま
