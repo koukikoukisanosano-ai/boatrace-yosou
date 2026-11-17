@@ -18,6 +18,7 @@ const researchFile = path.join(ROOT, 'docs', 'data', 'research.json');
 const recs = fs.existsSync(researchFile) ? (JSON.parse(fs.readFileSync(researchFile, 'utf8')).recommend || []) : [];
 // 2連単の買い方（学習で選んだ決め方: model.bet）。予想はオッズを混ぜない
 const EV_RULES = model.bet ? [{ kind: 'exacta', title: '2連単 期待値の買い目（メイン）', rule: { ...model.bet.rule, alpha: 1 } }] : [];
+const QKEY = '2連複（記録のみ）';
 const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 
 for (const ymd of dates) {
@@ -71,6 +72,18 @@ for (const ymd of dates) {
         x.bets++;
         if (t.combo.split('-').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
         const a = pay(r.payouts[er.kind] || [], t.combo);
+        if (a) { x.hits++; x.ret += a; }
+      }
+    }
+    // 2連複（記録のみ・お金はかけない）: 締切約2〜3分前に実際に決めた買い目（docs/live の picks[].q）
+    const lq = live && live.picks && live.picks[`${r.jcd}-${r.rno}`];
+    if (lq && lq.q && lq.q.state) {
+      const x = s.rec[QKEY] || (s.rec[QKEY] = { bets: 0, hits: 0, ret: 0, races: 0 });
+      x.races++;
+      for (const t of lq.q.picks || []) {
+        x.bets++;
+        if (t.combo.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
+        const a = pay(r.payouts.quinella || [], t.combo);
         if (a) { x.hits++; x.ret += a; }
       }
     }

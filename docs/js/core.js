@@ -702,12 +702,24 @@ export function exactaMap(e) {
   return out;
 }
 
+// 2連複のオッズ（1〜6 の組み合わせの辞書順 15通り）→ {'1=2': 倍率}
+export function quinellaMap(q) {
+  if (!q) return null;
+  const out = {}; let k = 0;
+  for (let a = 1; a <= 6; a++) for (let b = a + 1; b <= 6; b++) { out[`${a}=${b}`] = q[k]; k++; }
+  return out;
+}
+
+// 2連複（記録のみ・お金はかけない）の買い方: 2026年3〜10月の公平な検証で選ばれた形（確定オッズで149%）。
+// 締切約2〜3分前のオッズで選んだ実際の成績を記録して、1〜2週間で切り替えるか決める
+export const QUINELLA_RULE = { t: 2.0, minp: 0, maxo: 60, mino: 10, k: 3, edge: 1, alpha: 1 };
+
 // 期待値のある買い目: 予想（オッズを混ぜる前の base）に締切前オッズを割合 alpha で混ぜ、
 // 期待値＝確率×オッズ が rule.t 以上・確率 rule.minp 以上・rule.maxo 倍以下のものを、期待値の高い順に rule.k 点まで
 //   kind: 'trifecta'（3連単のオッズ）/ 'exacta'（2連単のオッズ）
 export function evPicks(pr, race, rule, kind) {
   if (!pr || !pr.base || !race.odds) return null;
-  const om = kind === 'exacta' ? exactaMap(race.odds.e) : oddsMap(race.odds.t);
+  const om = kind === 'exacta' ? exactaMap(race.odds.e) : kind === 'quinella' ? quinellaMap(race.odds.q) : oddsMap(race.odds.t);
   if (!om) return null;
   const alpha = rule.alpha ?? 1;
   const boats = pr.boats;
@@ -715,7 +727,8 @@ export function evPicks(pr, race, rule, kind) {
   const perms = permsOf(boats.length);
   const P = {};
   perms.forEach(([a, b, c], k) => {
-    const key = kind === 'exacta' ? `${boats[a].waku}-${boats[b].waku}` : `${boats[a].waku}-${boats[b].waku}-${boats[c].waku}`;
+    const wa = boats[a].waku, wb = boats[b].waku;
+    const key = kind === 'exacta' ? `${wa}-${wb}` : kind === 'quinella' ? `${Math.min(wa, wb)}=${Math.max(wa, wb)}` : `${wa}-${wb}-${boats[c].waku}`;
     P[key] = (P[key] || 0) + tri[k];
   });
   // 確率の補正（γ乗して合計1に）: research_exacta.py と同じ

@@ -302,6 +302,8 @@ class Live:
             rec = self.store["odds"][key]
             if rec.get("e") and "e0" not in rec:
                 rec["e0"], rec["at0"] = rec["e"], rec.get("at")   # 1回目（買い目を決めたとき）の2連単オッズも残す（オッズの動きを調べる用）
+                if rec.get("q"):
+                    rec["q0"] = rec["q"]                           # 2連複も（記録のみの2連複の答え合わせ用）
             rec.update({"e": od["e"], "at": now.isoformat(timespec="seconds"), "site": od.get("at"), "final": True})
             if od.get("q") and sum(v is not None for v in od["q"]) >= 8:
                 rec["q"] = od["q"]
@@ -356,8 +358,21 @@ class Live:
             self.store["picks"][key] = {"state": o["state"], "picks": o["picks"], "at": now.isoformat(timespec="seconds"), "final": final}
             if o.get("probs"):
                 self.store["picks"][key]["probs"] = o["probs"]   # 決めた時の30通りの確率（直前情報込み）
+            q = o.get("q") or {}
+            if q:
+                self.store["picks"][key]["q"] = q                # 2連複（記録のみ・お金はかけない）
             self.dirty = True
-            if o["state"] != "buy" or not NOTIFY.get("topic"):
+            qbuy = q.get("state") == "buy"
+            qline = ("\n［記録のみ・買わない］2連複 " + " ".join(f"{p['combo']} {p['odds']:.1f}倍" for p in q["picks"])) if qbuy else ""
+            if not NOTIFY.get("topic") or (o["state"] != "buy" and not qbuy):
+                continue
+            if o["state"] != "buy":   # 2連複（記録のみ）だけのレース: 控えめに知らせる
+                msg = {"topic": NOTIFY["topic"], "title": f"記録のみ 2連複 {' '.join(p['combo'] for p in q['picks'])}｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
+                       "message": "2連複の仮想記録です（買わなくてOK）" + qline.replace("\n", "\n", 1), "tags": ["memo"], "priority": 2, "click": NOTIFY.get("page", "")}
+                try:
+                    self.s.post("https://ntfy.sh/", data=json.dumps(msg, ensure_ascii=False).encode("utf-8"), timeout=15)
+                except Exception as e:  # noqa: BLE001
+                    log("通知に失敗:", e)
                 continue
             stake = max(100, int(NOTIFY.get("bank", 500000) / 200 / 100) * 100)
             combos = " ".join(p["combo"] for p in o["picks"])
@@ -365,7 +380,7 @@ class Live:
             left = f"\n締切まで約{max(1, int((dl - now).total_seconds() // 60))}分" if dl else ""
             detail = " / ".join(f"{p['combo']} {p['odds']:.1f}倍・確率{p['p'] * 100:.1f}%・期待値{p['ev']:.2f}" for p in o["picks"])
             msg = {"topic": NOTIFY["topic"], "title": f"買い 2連単 {combos}｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
-                   "message": f"{detail}\n{stake:,}円（入金{NOTIFY.get('bank', 500000) // 10000}万円の1/200）{left}",
+                   "message": f"{detail}\n{stake:,}円（入金{NOTIFY.get('bank', 500000) // 10000}万円の1/200）{left}{qline}",
                    "tags": ["moneybag"], "priority": 4, "click": NOTIFY.get("page", "")}
             try:
                 res = self.s.post("https://ntfy.sh/", data=json.dumps(msg, ensure_ascii=False).encode("utf-8"), timeout=15)

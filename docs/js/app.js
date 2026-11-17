@@ -1,6 +1,6 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
 // 古いファイルがスマホに残らないよう、ページと同じ版の印（?v=）を付けて読む
-const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, evPicks, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
+const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, evPicks, QUINELLA_RULE, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -391,7 +391,20 @@ function evHtml(r, pr) {
     const list = pr.exacta.filter((p) => p.p >= (rule.minp || 0)).slice(0, 3);
     body = `<div class="ev-sum">オッズ待ち　${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, (rule.mino || 0) + 0.1, 1).toFixed(1)}</b>倍以上で買い`).join('　')}</div>`;
   }
-  return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目${x.bot ? '（約2〜3分前に決定・通知）' : ''}</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>`;
+  return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目${x.bot ? '（約2〜3分前に決定・通知）' : ''}</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>${quinellaHtml(r)}`;
+}
+// 2連複（記録のみ・お金はかけない）: 締切約2〜3分前に自動で決めた買い目
+function quinellaHtml(r) {
+  const q = r.botPick && r.botPick.q;
+  if (!q || !q.state) return '';
+  let body = '<b>見送り</b>';
+  if (q.state === 'buy') {
+    const paid = (r.payouts && r.payouts.quinella) || [];
+    const hit = r.hasResult ? q.picks.map((p) => (paid.find((x) => x.combo === p.combo) || {}).amount || 0).reduce((a, b) => a + b, 0) : null;
+    const mark = hit === null ? '' : `<span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? `的中 ${(hit / 100).toFixed(1)}倍` : '外れ'}</span>`;
+    body = `<b class="num">${q.picks.map((p) => p.combo).join('　')}</b>${q.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値 ${p.ev.toFixed(2)}</span>`).join('')} ${mark}`;
+  }
+  return `<div class="rec"><div class="rec-h"><b>2連複（記録のみ・買わない）</b></div><div class="ev-sum">${body}</div><div class="rule">${esc(ruleText(QUINELLA_RULE))}</div></div>`;
 }
 
 // 根拠: 特徴量の値から、目立つ点を文章にする
@@ -461,9 +474,13 @@ function renderRecord() {
     <table class="rec"><thead><tr><th>日付</th><th>買い目</th><th>的中</th><th>回収</th><th>本命的中</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
+// 2連複（記録のみ）の仮想損益: 11/12〜11/17 は締切1分前のオッズで後から計算した参考、11/18 から実際の記録
+const QKEY = '2連複（記録のみ）';
+const Q_SIM_FROM = '2026-11-12';
+const Q_LIVE_FROM = '2026-11-18';
 // 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1レース＝残高の1/200、100円単位）
 const SIM_FROM = '2026-11-06';
-function simulate(start) {
+function simulate(start, key = REC_KEY, from = SIM_FROM, liveFrom = '') {
   const pts = []; let bank = start; let peak = start; let dd = 0; let bets = 0; let cost = 0; let ret = 0; let last = '';
   const push = (d, seg) => { if (d !== last) { pts.push({ d, bank, seg }); last = d; } else pts[pts.length - 1].bank = bank; };
   pts.push({ d: '', bank, seg: 2 });
@@ -476,26 +493,27 @@ function simulate(start) {
     push(d, seg);
   };
   // 実際の記録（締切前のオッズで選んだ買い目）だけ。SIM_FROM の日から
-  const days = ((state.report && state.report.days) || []).filter((x) => x.rec && x.rec[REC_KEY] && x.date >= SIM_FROM);
+  const days = ((state.report && state.report.days) || []).filter((x) => x.rec && x.rec[key] && x.date >= from);
   const lastSim = '';
   for (const x of days) {
     const d = x.date.replace(/-/g, '');
     if (d <= lastSim) continue;
-    const r = x.rec[REC_KEY];
+    const r = x.rec[key];
     if (!r.bets) continue;
     // 1日分をまとめて: 点数ぶん買って、払戻の合計（100円あたり）
     const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
     if (st < 100) break;
     bank += st * (r.ret / 100 - r.bets); cost += st * r.bets; ret += st * r.ret / 100; bets += r.bets;
     peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
-    push(d, 2);
+    push(d, liveFrom && x.date < liveFrom ? 1 : 2);
   }
   return { pts, bank, dd, bets, roi: cost ? ret / cost : 0 };
 }
-function renderSim() {
+function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = '', note = '') {
   const start = state.bank;
-  const S = simulate(start);
-  if (S.pts.length < 3) return `<section class="score"><h2>損益（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2><div class="k">${S.pts.length === 2 ? `1日目 ${S.bank - start >= 0 ? '+' : ''}${yen(S.bank - start)}（${S.bets}点）` : '毎朝、前日の分を記録します'}</div></section>`;
+  const S = simulate(start, key, from, liveFrom);
+  const SIM_FROM = from;
+  if (S.pts.length < 3) return `<section class="score"><h2>${title}（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>${note}<div class="k">${S.pts.length === 2 ? `1日目 ${S.bank - start >= 0 ? '+' : ''}${yen(S.bank - start)}（${S.bets}点）` : '毎朝、前日の分を記録します'}</div></section>`;
   const W = 340, H = 170, L = 4, T = 8, B = 18;
   const vals = S.pts.map((p) => p.bank);
   const lo = Math.min(start, ...vals), hi = Math.max(start, ...vals);
@@ -509,13 +527,13 @@ function renderSim() {
   const lab = (i) => { const d = S.pts[i].d; return d ? `${+d.slice(4, 6)}/${+d.slice(6, 8)}` : ''; };
   const xt = [1, Math.floor(S.pts.length / 2), S.pts.length - 1].map((i) => `<text x="${x(i).toFixed(1)}" y="${H - 4}" text-anchor="${i === 1 ? 'start' : i === S.pts.length - 1 ? 'end' : 'middle'}">${lab(i)}</text>`).join('');
   const gain = S.bank - start;
-  return `<section class="score"><h2>損益（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>
+  return `<section class="score"><h2>${title}（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>
     <div class="grid">
       <div><div class="k">残高</div><div class="v">${Math.round(S.bank / 1000).toLocaleString()}<small>千円</small></div><div class="k">${gain >= 0 ? '+' : ''}${yen(gain)}</div></div>
       <div><div class="k">回収率（${S.bets.toLocaleString()}点）</div><div class="v">${pct(S.roi)}<small>%</small></div></div>
       <div><div class="k">最大の落ち込み</div><div class="v">${Math.round(S.dd / 1000).toLocaleString()}<small>千円</small></div></div>
     </div>
-    <svg class="sim" viewBox="0 0 ${W} ${H}" role="img" aria-label="残高の推移"><line class="base" x1="${L}" x2="${W - L}" y1="${y(start).toFixed(1)}" y2="${y(start).toFixed(1)}"/>${lines}${xt}</svg>
+    <svg class="sim" viewBox="0 0 ${W} ${H}" role="img" aria-label="残高の推移"><line class="base" x1="${L}" x2="${W - L}" y1="${y(start).toFixed(1)}" y2="${y(start).toFixed(1)}"/>${lines}${xt}</svg>${note}
 
   </section>`;
 }
@@ -572,7 +590,8 @@ function render() {
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
-  if (state.view === 'done') html += renderScore(rs) + renderSim() + renderRecord();
+  if (state.view === 'done') html += renderScore(rs) + renderSim() + renderSim(QKEY, '2連複の仮想損益（記録のみ・買わない）', Q_SIM_FROM, Q_LIVE_FROM,
+    `<div class="legend"><span class="sim-hold">参考: 締切1分前のオッズで計算（11/12〜${+Q_LIVE_FROM.slice(5, 7)}/${+addDays(Q_LIVE_FROM, -1).slice(8)}）</span><span class="sim-live">実際に約2〜3分前に決めた記録</span></div>`) + renderRecord();
   if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;

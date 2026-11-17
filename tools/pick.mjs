@@ -3,7 +3,7 @@
 // 出力（1行1レースのJSON）: {key, venue, rno, closedAt, state: buy|pass|none, picks: [{combo, p, odds, ev}]}
 import fs from 'node:fs';
 import path from 'node:path';
-import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, evPicks } from '../docs/js/core.js';
+import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, evPicks, QUINELLA_RULE } from '../docs/js/core.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const [dayPath, livePath, keysArg] = process.argv.slice(2);
@@ -21,7 +21,7 @@ for (const r of races) {
   const key = `${r.jcd}-${r.rno}`;
   // 自動取得した直前情報とオッズを重ねる（ページの mergeLive と同じ）
   const o = live.odds && live.odds[key];
-  if (o && (o.t || o.e)) r.odds = { t: o.t || null, e: o.e || null };
+  if (o && (o.t || o.e)) r.odds = { t: o.t || null, e: o.e || null, q: o.q || null };
   const L = live.races && live.races[key];
   if (L && r.preview !== 'full') {
     for (const b of r.boats) {
@@ -39,6 +39,9 @@ for (const r of races) {
     const res = pr && rule && r.odds && r.odds.e ? evPicks(pr, r, rule, 'exacta') : null;
     if (res) out = { ...out, state: res.picks.length ? 'buy' : 'pass', picks: res.picks.map((x) => ({ combo: x.combo, p: +x.p.toFixed(4), odds: x.odds, ev: +x.ev.toFixed(3) })),
       probs: Object.fromEntries(Object.entries(res.probs).map(([k, v]) => [k, +v.toPrecision(4)])) };  // 30通りの確率（段階3: 確定オッズの動きの分析用）
+    // 2連複（記録のみ）
+    const rq = pr && r.odds && r.odds.q ? evPicks(pr, r, QUINELLA_RULE, 'quinella') : null;
+    if (rq) out.q = { state: rq.picks.length ? 'buy' : 'pass', picks: rq.picks.map((x) => ({ combo: x.combo, p: +x.p.toFixed(4), odds: x.odds, ev: +x.ev.toFixed(3) })) };
   } catch (e) { out.error = String(e); }
   console.log(JSON.stringify(out));
 }
