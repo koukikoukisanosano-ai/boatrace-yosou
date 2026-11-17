@@ -78,13 +78,14 @@ for (const ymd of dates) {
     // 2連複（記録のみ・お金はかけない）: 締切約2〜3分前に実際に決めた買い目（docs/live の picks[].q）
     const lq = live && live.picks && live.picks[`${r.jcd}-${r.rno}`];
     if (lq && lq.q && lq.q.state) {
-      const x = s.rec[QKEY] || (s.rec[QKEY] = { bets: 0, hits: 0, ret: 0, races: 0 });
+      const x = s.rec[QKEY] || (s.rec[QKEY] = { bets: 0, hits: 0, ret: 0, races: 0, hitOdds: [] });
       x.races++;
+      const n = (lq.q.picks || []).length;
       for (const t of lq.q.picks || []) {
         x.bets++;
         if (t.combo.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
         const a = pay(r.payouts.quinella || [], t.combo);
-        if (a) { x.hits++; x.ret += a; }
+        if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, n]); }   // 当たった目の払戻倍率と、そのレースで買った点数（自分の賭け金でオッズが下がる分を後で差し引く用）
       }
     }
     // おすすめの買い方の成績

@@ -478,10 +478,18 @@ function renderRecord() {
 const QKEY = '2連複（記録のみ）';
 const Q_SIM_FROM = '2026-11-18';
 const Q_LIVE_FROM = '2026-11-18';
+// 自分の賭け金でオッズが下がる分: 2連複の売上は公開データに無いので、1レース20万円と仮定（券種別の売上の割合 0.5〜1.6% から）
+// 当たった目の確定倍率 O、その目への他の人の票 x = 0.75T/O に自分の st が加わると → 0.75(T+自分の全額)/(x+st)
+const Q_POOL = 200000, TAKE = 0.75;
+function qAdjRet(r, st) {   // 1日分の払戻（100円あたりの合計）を、自分の賭け金で下がった倍率で計算し直す
+  if (!r.hitOdds) return r.ret;
+  const refunds = r.ret - r.hitOdds.reduce((a, [o]) => a + o * 100, 0);
+  return refunds + r.hitOdds.reduce((a, [o, n]) => a + 100 * TAKE * (Q_POOL + n * st) / (TAKE * Q_POOL / o + st), 0);
+}
 // 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1レース＝残高の1/200、100円単位）
 const SIM_FROM = '2026-11-06';
 function simulate(start, key = REC_KEY, from = SIM_FROM, liveFrom = '') {
-  const pts = []; let bank = start; let peak = start; let dd = 0; let bets = 0; let cost = 0; let ret = 0; let last = '';
+  const pts = []; let bank = start; let peak = start; let dd = 0; let bets = 0; let cost = 0; let ret = 0; let raw = 0; let last = '';
   const push = (d, seg) => { if (d !== last) { pts.push({ d, bank, seg }); last = d; } else pts[pts.length - 1].bank = bank; };
   pts.push({ d: '', bank, seg: 2 });
   const step = (n, payPer100, d, seg) => {
@@ -503,13 +511,14 @@ function simulate(start, key = REC_KEY, from = SIM_FROM, liveFrom = '') {
     // 1日分をまとめて: 点数ぶん買って、払戻の合計（100円あたり）
     const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
     if (st < 100) break;
-    bank += st * (r.ret / 100 - r.bets); cost += st * r.bets; ret += st * r.ret / 100; bets += r.bets;
+    const rr = key === QKEY ? qAdjRet(r, st) : r.ret;
+    bank += st * (rr / 100 - r.bets); cost += st * r.bets; ret += st * rr / 100; bets += r.bets; raw += st * r.ret / 100;
     peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
     push(d, liveFrom && x.date < liveFrom ? 1 : 2);
   }
-  return { pts, bank, dd, bets, roi: cost ? ret / cost : 0 };
+  return { pts, bank, dd, bets, roi: cost ? ret / cost : 0, rawRoi: cost ? raw / cost : 0 };
 }
-function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = '', note = '') {
+function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = '', note = '', showRaw = false) {
   const start = state.bank;
   const S = simulate(start, key, from, liveFrom);
   const SIM_FROM = from;
@@ -530,7 +539,7 @@ function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = 
   return `<section class="score"><h2>${title}（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>
     <div class="grid">
       <div><div class="k">残高</div><div class="v">${Math.round(S.bank / 1000).toLocaleString()}<small>千円</small></div><div class="k">${gain >= 0 ? '+' : ''}${yen(gain)}</div></div>
-      <div><div class="k">回収率（${S.bets.toLocaleString()}点）</div><div class="v">${pct(S.roi)}<small>%</small></div></div>
+      <div><div class="k">回収率（${S.bets.toLocaleString()}点）</div><div class="v">${pct(S.roi)}<small>%</small></div>${showRaw ? `<div class="k">差し引く前 ${pct(S.rawRoi)}%</div>` : ''}</div>
       <div><div class="k">最大の落ち込み</div><div class="v">${Math.round(S.dd / 1000).toLocaleString()}<small>千円</small></div></div>
     </div>
     <svg class="sim" viewBox="0 0 ${W} ${H}" role="img" aria-label="残高の推移"><line class="base" x1="${L}" x2="${W - L}" y1="${y(start).toFixed(1)}" y2="${y(start).toFixed(1)}"/>${lines}${xt}</svg>${note}
@@ -591,7 +600,7 @@ function render() {
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
   if (state.view === 'done') html += renderScore(rs) + renderSim() + renderSim(QKEY, '2連複の仮想損益（記録のみ・買わない）', Q_SIM_FROM, Q_LIVE_FROM,
-    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）</div>') + renderRecord();
+    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + renderRecord();
   if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;
