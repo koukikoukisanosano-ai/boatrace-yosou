@@ -41,10 +41,15 @@ MAXK = [1, 2, 3]
 EDGE = [1.0, 1.2]
 
 
-def rule_list(h1=False):
+# 券種ごとの候補（--bet-type）。2連単以外はオッズの幅と確率の下限を券種に合わせる
+BT_MAXO = {"exacta": MAXO, "quinella": [15.0, 30.0, 60.0], "trio": [30.0, 60.0, 100.0, 200.0], "trifecta": [30.0, 60.0, 100.0, 200.0, 500.0]}
+BT_MINP = {"exacta": MINP, "quinella": [0.0, 0.04, 0.07, 0.1, 0.15], "trio": [0.0, 0.01, 0.02, 0.04, 0.07], "trifecta": [0.0, 0.005, 0.01, 0.02, 0.04]}
+
+
+def rule_list(h1=False, bt="exacta"):
     """h1=True: 期待値の高い k 点のうち、1号艇が1着の買い目だけ（1号艇が負けるレースは市場のほうが正確なため）"""
     return [dict(t=t, minp=mp, maxo=mo, mino=mi, k=k, edge=ed, **({"h1": 1} if h1 else {}))
-            for t, mp, mo, mi, k, ed in itertools.product(EV_T, MINP, MAXO, MINO, MAXK, EDGE) if not (ed > 1 and t > 1.2) and mi < mo]
+            for t, mp, mo, mi, k, ed in itertools.product(EV_T, BT_MINP[bt], BT_MAXO[bt], MINO, MAXK, EDGE) if not (ed > 1 and t > 1.2) and mi < mo]
 
 
 def masks(prob, odds, valid, rules):
@@ -81,10 +86,14 @@ def main():
     ap.add_argument("--min-odds", type=float, default=0.0, help="この倍率以下は買わない（買い方の候補を「◯倍超」のものだけにする）")
     ap.add_argument("--out", default=str(ROOT / "docs" / "data" / "fair.json"))
     ap.add_argument("--universe", default="all", choices=["all", "h1"], help="買い方の系統: all=今まで通り / h1=1号艇が1着の買い目だけ")
+    ap.add_argument("--bet-type", default="exacta", choices=["exacta", "quinella", "trio", "trifecta"], help="券種（2連単以外は比べる用）")
     a = ap.parse_args()
+    bt = a.bet_type
     files = sorted(Path(a.preds).rglob("fair_*.pkl"))
     M = [pickle.load(open(f, "rb")) for f in files]
     M.sort(key=lambda b: b["month"])
+    if bt != "exacta":   # 2連単以外の確定オッズは 2026-01 から（Turnmark）。それより前の月は使わない
+        M = [b for b in M if b["month"] >= "2026-01"]
     months = [b["month"] for b in M]
     log("月:", months)
     need = set(np.concatenate([b["ids"] for b in M]))
@@ -102,7 +111,7 @@ def main():
         combos[f"[試] {k}＋展示0.15"] = {k: 0.85, "ce": 0.15}
         combos[f"[試] {k}＋展開（大きめ）"] = {k: 0.5, "tenkai_big": 0.5}
 
-    rules = [r for r in rule_list() + rule_list(h1=True) if r["mino"] >= a.min_odds]
+    rules = [r for r in rule_list(bt=bt) + (rule_list(h1=True) if bt == "exacta" else []) if r["mino"] >= a.min_odds]
     cands = [(cn, i) for cn in combos for i in range(len(rules))]
     is_h1 = np.array([bool(rules[i].get("h1")) for _, i in cands])
     # 試しの予想は比べるだけ（実際の買い方を選ぶ候補には入れない）。「1号艇が1着のみ」は別の買い方の系統として比べる（--universe h1 で本番に）
@@ -112,10 +121,10 @@ def main():
     D = []
     for mi, b in enumerate(M):
         ids = b["ids"]
-        eo = odds_matrix(ids, load_odds(sorted({f"{i[:4]}-{i[4:6]}-{i[6:8]}" for i in ids})), "exacta")
-        pay = payout_matrix(ids, races, "exacta") / 100
-        has = np.isfinite(eo).sum(1) >= 20
-        probs = {cn: bet_probs(geo([b[k].astype(float) for k in mix], list(mix.values())))["exacta"] for cn, mix in combos.items()}
+        eo = odds_matrix(ids, load_odds(sorted({f"{i[:4]}-{i[4:6]}-{i[6:8]}" for i in ids})), bt)
+        pay = payout_matrix(ids, races, bt) / 100
+        has = np.isfinite(eo).sum(1) >= int(eo.shape[1] * 2 / 3)
+        probs = {cn: bet_probs(geo([b[k].astype(float) for k in mix], list(mix.values())))[bt] for cn, mix in combos.items()}
         D.append({"eo": eo, "pay": pay, "has": has, "probs": probs, "days": np.array([str(i)[:8] for i in ids])})
         ci = 0
         for cn in combos:
@@ -170,6 +179,26 @@ def main():
              "ci95": [round(float(np.percentile(bs, 2.5)), 4), round(float(np.percentile(bs, 97.5)), 4)], "p_below_100": round(float((bs < 1).mean()), 4),
              "days": int(len(ud))}
     log("公平な検証の合計:", json.dumps(total, ensure_ascii=False))
+    if bt != "exacta":   # 券種を比べるだけ: 混ぜ方ごとの公平な成績と、全部の月の成績で一番の買い方
+        for cn in combos:
+            idx = [i for i, c in enumerate(cands) if c[0] == cn]
+            xs = []
+            for mi, m in enumerate(months):
+                if m < a.first_test:
+                    continue
+                nn, ss, ss2 = stats[idx, :mi, 0].sum(1), stats[idx, :mi, 1].sum(1), stats[idx, :mi, 2].sum(1)
+                rr = np.where(nn > 0, ss / np.maximum(nn, 1), 0)
+                ee = np.sqrt(np.maximum(ss2 / np.maximum(nn, 1) - rr ** 2, 0) / np.maximum(nn, 1))
+                xs.append(stats[idx[int(np.argmax(np.where(nn >= a.min_bets_per_month * mi, rr - ee, -9)))], mi])
+            xs = np.array(xs)
+            log(f"混ぜ方ごと（公平）{cn}: {xs[:, 1].sum() / max(xs[:, 0].sum(), 1):.4f}（{int(xs[:, 0].sum())}点）")
+        n, s_, s2 = stats[:, :, 0].sum(1), stats[:, :, 1].sum(1), stats[:, :, 2].sum(1)
+        roi = np.where(n > 0, s_ / np.maximum(n, 1), 0)
+        se = np.sqrt(np.maximum(s2 / np.maximum(n, 1) - roi ** 2, 0) / np.maximum(n, 1))
+        for j in np.argsort(-np.where(n >= a.min_bets_per_month * len(M), roi - se, -9))[:5]:
+            log(f"全部の月で上位: {cands[j][0]}・{label(rules[cands[j][1]])} {roi[j]:.4f}±{se[j]:.4f}（{int(n[j])}点）")
+        Path(a.out).write_text(json.dumps({"bet_type": bt, "months": results, "total": total, "first_test": a.first_test}, ensure_ascii=False))
+        return
     # 参考: 今の買い方（後から選んだもの）をそのまま全部の月に当てはめた場合
     fixed = {"prob": "展開（大きめ）＋展示0.15", "rule": dict(t=1.3, minp=0.07, maxo=60.0, mino=10.0, k=1, edge=1.0)}
     ref = []

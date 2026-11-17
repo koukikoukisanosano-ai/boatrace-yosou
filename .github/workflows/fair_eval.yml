@@ -9,6 +9,9 @@ on:
       min_odds:
         description: 'この倍率以下は買わない（0 なら制限なし）'
         default: '10'
+      bet_type:
+        description: '券種（exacta=2連単 / quinella=2連複 / trio=3連複 / trifecta=3連単）'
+        default: 'exacta'
       first_test:
         description: '答え合わせを始める月（それより前は買い方を選ぶためだけに使う）'
         default: '2026-03'
@@ -46,7 +49,7 @@ jobs:
       - name: 学習用の表（払戻）
         run: node --max-old-space-size=6144 tools/build_dataset.mjs work/full
       - name: 月ごとに、それより前だけで選んだ買い方で答え合わせ
-        run: python tools/fair_eval.py --preds fair --work work/full --min-odds "${{ inputs.min_odds || 0 }}" --first-test "${{ inputs.first_test || '2026-03' }}" | tee fair.log
+        run: python tools/fair_eval.py --preds fair --work work/full --min-odds "${{ inputs.min_odds || 0 }}" --first-test "${{ inputs.first_test || '2026-03' }}" --bet-type "${{ inputs.bet_type || 'exacta' }}" | tee fair.log
       - name: 保存
         if: inputs.save
         run: |
