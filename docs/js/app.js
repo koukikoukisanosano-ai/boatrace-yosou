@@ -474,9 +474,9 @@ function renderRecord() {
     <table class="rec"><thead><tr><th>日付</th><th>買い目</th><th>的中</th><th>回収</th><th>本命的中</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
-// 2連複（記録のみ）の仮想損益: 11/12〜11/17 は締切1分前のオッズで後から計算した参考、11/18 から実際の記録
+// 2連複（記録のみ）の仮想損益: 11/18 から、締切約2〜3分前に実際に決めた買い目だけで
 const QKEY = '2連複（記録のみ）';
-const Q_SIM_FROM = '2026-11-12';
+const Q_SIM_FROM = '2026-11-18';
 const Q_LIVE_FROM = '2026-11-18';
 // 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1レース＝残高の1/200、100円単位）
 const SIM_FROM = '2026-11-06';
@@ -591,7 +591,7 @@ function render() {
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
   if (state.view === 'done') html += renderScore(rs) + renderSim() + renderSim(QKEY, '2連複の仮想損益（記録のみ・買わない）', Q_SIM_FROM, Q_LIVE_FROM,
-    `<div class="legend"><span class="sim-hold">参考: 締切1分前のオッズで計算（11/12〜${+Q_LIVE_FROM.slice(5, 7)}/${+addDays(Q_LIVE_FROM, -1).slice(8)}）</span><span class="sim-live">実際に約2〜3分前に決めた記録</span></div>`) + renderRecord();
+    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）</div>') + renderRecord();
   if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;
