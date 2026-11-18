@@ -45,7 +45,8 @@ SPECIAL = {
     12: ["/asp/kyogi/12/pc/st02{RR}.htm", "/asp/kyogi/12/sp/yoso05{RR}.htm"],
     16: ["/asp/kyogi/16/sp/yoso05{RR}.htm", "/asp/kyogi/16/pc/st02{RR}.htm"],
 }
-COMMON = ["/sp/index.php?page=yosou-cyokuzen&race={R}&day={D}", "/sp/index.php?page=yosou-cyokuzen&race={R}"]
+COMMON = ["/sp/index.php?page=yosou-cyokuzen&race={R}&day={D}", "/sp/index.php?page=yosou-cyokuzen&race={R}",
+          "/asp/kyogi/{JJ}/pc/st02{RR}.htm", "/asp/kyogi/{JJ}/sp/yoso05{RR}.htm"]
 LABELS = [("半周", "半周"), ("一周", "一周"), ("1周", "一周"), ("まわり足", "まわり足"), ("回り足", "まわり足"), ("直線", "直線"), ("展示", "展示")]
 
 
@@ -180,7 +181,7 @@ def main():
                 ok += 1
                 continue
             for path in cands:
-                url = base + path.format(R=rno, RR=f"{rno:02d}", D=ymd)
+                url = base + path.format(R=rno, RR=f"{rno:02d}", D=ymd, JJ=f"{jcd:02d}")
                 try:
                     r = s.get(url, timeout=20)
                     time.sleep(a.wait)
