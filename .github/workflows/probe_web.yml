@@ -8,6 +8,9 @@ on:
       grep:
         description: '探す言葉（正規表現）'
         default: '一周|周回|まわり足|回り足|直線|tenji|lap'
+      raw:
+        description: '本文をそのまま何文字出すか（0なら出さない）'
+        default: '0'
 jobs:
   probe:
     runs-on: ubuntu-latest
@@ -15,6 +18,7 @@ jobs:
       - env:
           URLS: ${{ inputs.urls }}
           PAT: ${{ inputs.grep }}
+          RAW: ${{ inputs.raw }}
         run: |
           for u in $URLS; do
             echo "=================== $u"
@@ -28,6 +32,8 @@ jobs:
           t = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', re.sub(r'(?s)<script.*?</script>|<style.*?</style>', ' ', s)))
           for m in list(re.finditer(pat, t))[:12]:
               print('…', t[max(0, m.start() - 120): m.end() + 200])
+          n = int(os.environ.get('RAW') or 0)
+          if n: print('RAW>>>', s[:n].replace('\n', ' | '))
           print('robots/notice:', re.findall(r'(?i)(スクレイピング|自動取得|転載|無断)[^。]{0,80}', t)[:5])
           P
           done
