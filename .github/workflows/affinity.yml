@@ -1,0 +1,41 @@
+name: 確かめる（選手と競艇場の相性）
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: '公平な検証（fair.yml）の実行ID（月ごとの予想を使う）'
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt scipy
+      - name: 公式の過去データ（2016〜2024年8月）
+        run: |
+          mkdir -p data/mbrace tars
+          gh release download mbrace-data -p 'mbrace_*.tar' -D tars
+          for t in tars/mbrace_*.tar; do tar xf "$t" -C data/mbrace; done
+          rm -rf tars
+      - name: 月ごとの予想
+        run: gh run download ${{ inputs.run_id }} -D fair
+      - name: 確かめる
+        run: python tools/affinity_test.py --mbrace data/mbrace --preds fair --out affinity.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: affinity
+          path: affinity.json
