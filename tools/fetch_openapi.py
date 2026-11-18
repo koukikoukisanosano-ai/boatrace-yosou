@@ -43,7 +43,30 @@ def fetch_day(s: requests.Session, d: date) -> dict | None:
     raise RuntimeError(f"取得できませんでした: {url}")
 
 
+def patch_programs(d: date, j: dict) -> int:
+    """公開データで一部のレースの出走表（締切時刻・選手の登録番号など）が抜けていたら、
+    自動判定が残した控え docs/data/programs/YYYYMMDD.json で戻す（近況や学習が狂わないように）"""
+    pp = ROOT / "docs" / "data" / "programs" / f"{d:%Y%m%d}.json"
+    if not pp.exists():
+        return 0
+    prog = json.loads(pp.read_text())
+    n = 0
+    for jcd, st in ((j.get("programs") or {}).get("stadiums") or {}).items():
+        for rno, rc in (st.get("races") or {}).items():
+            rs = rc.get("racers") or {}
+            rs = list(rs.values()) if isinstance(rs, dict) else rs
+            ok = rc.get("closed_at") and rs and all(x.get("number") for x in rs)
+            k = f"{int(jcd)}-{int(rno)}"
+            if not ok and k in prog:
+                rc.update(prog[k])
+                n += 1
+    if n:
+        print(f"  {d}: 出走表の抜けを控えで補いました（{n} レース）", file=sys.stderr)
+    return n
+
+
 def save(d: date, j: dict) -> int:
+    patch_programs(d, j)
     p = path_for(d)
     p.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(j, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")

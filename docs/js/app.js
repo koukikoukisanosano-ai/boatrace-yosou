@@ -81,7 +81,21 @@ async function loadDay(ymd) {
     else throw e;
   }
   state.openApiAt = res.lastModified;
+  await patchPrograms(ymd, res.json);
   return normalizeDay(res.json);
+}
+
+// 出走表の穴埋め: 公開データで途中から一部のレースの出走表（締切時刻・選手）が抜けることがあるため、
+// 自動判定が残した控え（data/programs）で戻す
+async function patchPrograms(ymd, j) {
+  const st = (j && j.programs && j.programs.stadiums) || {};
+  const ok = (rc) => rc.closed_at && Object.values(rc.racers || {}).length && Object.values(rc.racers || {}).every((x) => x.number);
+  const bad = [];
+  for (const [jcd, v] of Object.entries(st)) for (const [rno, rc] of Object.entries(v.races || {})) if (!ok(rc)) bad.push([`${+jcd}-${+rno}`, rc]);
+  if (!bad.length) return;
+  let prog = null;
+  try { prog = (await getJSON(`data/programs/${compact(ymd)}.json?t=${Date.now()}`)).json; } catch (e) { return; }
+  for (const [k, rc] of bad) if (prog[k]) Object.assign(rc, prog[k]);
 }
 
 async function loadLive(ymd) {
@@ -109,6 +123,7 @@ function fillClosed(races, live) {
     r.closedAt = dl[k] || seen[k] || '';
   }
   if (changed) { try { localStorage.setItem(ck, JSON.stringify(seen)); } catch (e) { /* 保存できなくても表示はできる */ } }
+  races.sort((a, b) => (deadline(a) - deadline(b)) || (a.jcd - b.jcd) || (a.rno - b.rno));   // 補った時刻で並べ直す
 }
 
 // 自前で取った直前情報（公式サイトから数分おき）で、公開データにまだ無い分を埋める
@@ -231,8 +246,9 @@ function leftText(r) {
   if (r.hasResult) return '確定';
   const m = minsLeft(r);
   if (m <= 0) return '締切';
-  if (m < 60) return `あと${Math.ceil(m)}分`;
-  return `あと${Math.floor(m / 60)}時間${Math.ceil(m % 60)}分`;
+  const c = Math.ceil(m);   // 先に分へ丸めてから時間に分ける（「1時間60分」にならないように）
+  if (c < 60) return `あと${c}分`;
+  return `あと${Math.floor(c / 60)}時間${c % 60}分`;
 }
 
 function exactaResult(r) {

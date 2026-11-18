@@ -34,6 +34,13 @@ import odds_parse  # noqa: E402
 NOTIFY = json.loads((Path(__file__).resolve().parent.parent / "docs" / "notify.json").read_text()) if (Path(__file__).resolve().parent.parent / "docs" / "notify.json").exists() else {}
 DAY_JSON = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "openapi_today.json"
 
+
+def program_ok(rc: dict) -> bool:
+    """出走表がちゃんと入っているか（締切時刻と、全員の登録番号）"""
+    rs = rc.get("racers") or {}
+    rs = rs.values() if isinstance(rs, dict) else rs
+    return bool(rc.get("closed_at")) and bool(rs) and all(x.get("number") for x in rs)
+
 try:
     from bs4 import XMLParsedAsHTMLWarning
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -42,6 +49,7 @@ except ImportError:  # pragma: no cover
 
 JST = timezone(timedelta(hours=9))
 ROOT = Path(__file__).resolve().parent.parent
+PROG_DIR = ROOT / "docs" / "data" / "programs"   # その日の出走表の控え（公開データで抜けたときに戻す。サイトも使う）
 LIVE_DIR = ROOT / "docs" / "live"
 OFFICIAL = "https://www.boatrace.jp/owpc/pc/race"
 OPENAPI = "https://boatraceopenapi.github.io/api/v1"
@@ -223,6 +231,7 @@ class Live:
             log("公開データの取得に失敗:", e)
             self.sched_at = time.time() - 420  # 3分後にもう一度
             return
+        self.patch_programs(j, ymd)
         try:
             DAY_JSON.write_text(json.dumps(j, ensure_ascii=False))
         except Exception as e:  # noqa: BLE001
@@ -251,6 +260,33 @@ class Live:
         self.schedule = sched
         self.sched_at = time.time()
         log(f"レース予定 {len(sched)} 件（公開データに直前情報あり {sum(x['openapi_has'] for x in sched)} 件）")
+
+    def patch_programs(self, j: dict, ymd: str):
+        """出走表の穴埋め: 公開データで途中から一部のレースの出走表（締切時刻・選手の登録番号・勝率など）が
+        抜ける（null になる）ことがある。一度ちゃんと取れた出走表を docs/data/programs/YYYYMMDD.json に残し、抜けたら戻す"""
+        if getattr(self, "prog_day", None) != ymd:
+            self.prog_day, self.prog_dirty = ymd, False
+            pp = PROG_DIR / f"{ymd.replace('-', '')}.json"
+            try:
+                self.prog = json.loads(pp.read_text()) if pp.exists() else {}
+            except Exception:  # noqa: BLE001
+                self.prog = {}
+        fixed = 0
+        for jcd, st in (j.get("programs", {}).get("stadiums") or {}).items():
+            for rno, rc in (st.get("races") or {}).items():
+                key = f"{int(jcd)}-{int(rno)}"
+                if (rc.get("date") or "") != ymd:
+                    continue
+                if program_ok(rc):
+                    keep = {k: v for k, v in rc.items() if k not in ("preview", "result")}
+                    if self.prog.get(key) != keep:
+                        self.prog[key] = keep
+                        self.prog_dirty = True
+                elif key in self.prog:
+                    rc.update(self.prog[key])
+                    fixed += 1
+        if fixed:
+            log(f"出走表の抜けを補いました: {fixed} レース")
 
     def targets(self, now: datetime) -> list[dict]:
         out = []
@@ -468,7 +504,7 @@ class Live:
             saved = json.loads(p.read_text())
         except Exception:  # noqa: BLE001
             return
-        for sec in ("races", "odds", "picks"):
+        for sec in ("races", "odds", "picks", "deadlines"):
             mine = self.store.setdefault(sec, {})
             for k, v in (saved.get(sec) or {}).items():
                 if k not in mine:
@@ -485,9 +521,16 @@ class Live:
             self.merge_saved()                                        # 手元にないレースを足してから書く
             self.path().write_text(json.dumps(self.store, ensure_ascii=False, separators=(",", ":")))
             self.dirty = False
+            progs = []
+            if getattr(self, "prog_dirty", False) and getattr(self, "prog", None):
+                PROG_DIR.mkdir(parents=True, exist_ok=True)
+                pp = PROG_DIR / f"{self.prog_day.replace('-', '')}.json"
+                pp.write_text(json.dumps(self.prog, ensure_ascii=False, separators=(",", ":")))
+                self.prog_dirty = False
+                progs.append(str(pp.relative_to(ROOT)))
             if self.push:
                 rel = str(self.path().relative_to(ROOT))
-                self.git("add", rel)
+                self.git("add", rel, *progs)
                 if self.git("diff", "--cached", "--quiet").returncode != 0:
                     self.git("commit", "-q", "-m", f"直前情報 {datetime.now(JST):%H:%M}")
                     self.unpushed = True
