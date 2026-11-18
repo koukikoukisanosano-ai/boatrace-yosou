@@ -1,0 +1,12 @@
+{
+ "11": {
+  "cols": [
+   "まわり足",
+   "一周",
+   "展示",
+   "直線"
+  ],
+  "path": "/sp/index.php?page=yosou-cyokuzen&race={R}&day={D}",
+  "since": "2026-11-18"
+ }
+}
