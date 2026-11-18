@@ -664,7 +664,7 @@ function render() {
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
-  if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（記録のみ・買わない）', Q_SIM_FROM, Q_LIVE_FROM,
+  if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', Q_SIM_FROM, Q_LIVE_FROM,
     '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
   if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
