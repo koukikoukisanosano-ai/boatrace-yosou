@@ -22,7 +22,9 @@ jobs:
         run: |
           for u in $URLS; do
             echo "=================== $u"
+            rm -f p.html
             curl -sSL -A "Mozilla/5.0 (boatrace-yosou research)" --max-time 30 "$u" -o p.html -w "%{http_code} %{size_download} %{url_effective}\n" || true
+            touch p.html
             python3 - <<'P'
           import re, os
           s = open('p.html', encoding='utf-8', errors='replace').read()
