@@ -286,7 +286,7 @@ function raceRow(r) {
     const betTag = xb.state === 'buy' ? `<span class="bet buy">買い ${formation(xb.picks.map((p) => p.combo)).join(' ')} ${buyText(xb.picks.length)}</span>${br ? `<span class="hitmark ${br.hit ? 'yes' : 'no'}">${br.hit ? `的中 +${yen(br.amount * perPoint(xb.picks.length) / 100 - perPoint(xb.picks.length) * xb.picks.length)}` : '外れ'}</span>` : ''}`
       : xb.state === 'pass' ? '<span class="bet pass">見送り</span>' : '';
     const pv = r.preview === 'none' ? '<span class="pv none">展示前</span>' : '';
-    picks = `<span class="picks"><span class="marks">${marks}</span><span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${betTag}${pv}</span>`;
+    picks = `<span class="picks"><span class="marks">${marks}</span><span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${SHOW_EXACTA ? betTag : quinellaTag(r)}${pv}</span>`;
   } else {
     picks = '<span class="picks">予想できません</span>';
   }
@@ -377,9 +377,9 @@ function raceDetail(r, pr) {
 
   return `<div class="cond">${cond.map((c) => `<span>${c}</span>`).join('')}</div>
     ${evHtml(r, pr)}
+    ${qbets ? `<h3>2連複の確率<small>${qAt}</small></h3><div class="bets">${qbets}</div>` : ''}
     <h3>2連単の確率<small>${oddsAt}</small></h3>
     <div class="bets">${bets}</div>
-    ${qbets ? `<h3>2連複の確率<small>${qAt}</small></h3><div class="bets">${qbets}</div>` : ''}
     ${rows}
     ${tenkaiHtml(pr)}
     <h3>予想の根拠</h3>
@@ -436,8 +436,19 @@ function evHtml(r, pr) {
     const list = pr.exacta.filter((p) => p.p >= (rule.minp || 0)).slice(0, 3);
     body = `<div class="ev-sum">オッズ待ち　${list.map((p) => `${comboHtml(p.combo)} <b class="num">${Math.max(rule.t / p.p, (rule.mino || 0) + 0.1, 1).toFixed(1)}</b>倍以上で買い`).join('　')}</div>`;
   }
+  if (!SHOW_EXACTA) return quinellaHtml(r);
   return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目${x.bot ? '（約2〜3分前に決定・通知）' : ''}</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>${quinellaHtml(r)}`;
 }
+// 一覧の札: 2連複の買い目（自動で決めたもの）と当たり外れ
+function quinellaTag(r) {
+  const q = r.botPick && r.botPick.q;
+  if (!q || !q.state) return '';
+  if (q.state !== 'buy') return '<span class="bet pass">見送り</span>';
+  const paid = (r.payouts && r.payouts.quinella) || [];
+  const hit = r.hasResult ? q.picks.map((p) => (paid.find((x) => x.combo === p.combo) || {}).amount || 0).reduce((a, b) => a + b, 0) : null;
+  return `<span class="bet buy">2連複 ${q.picks.map((p) => p.combo).join(' ')}</span>${hit === null ? '' : `<span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? `的中 ${(hit / 100).toFixed(1)}倍` : '外れ'}</span>`}`;
+}
+
 // 2連複（記録のみ・お金はかけない）: 締切約2〜3分前に自動で決めた買い目
 function quinellaHtml(r) {
   const q = r.botPick && r.botPick.q;
@@ -449,7 +460,7 @@ function quinellaHtml(r) {
     const mark = hit === null ? '' : `<span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? `的中 ${(hit / 100).toFixed(1)}倍` : '外れ'}</span>`;
     body = `<b class="num">${q.picks.map((p) => p.combo).join('　')}</b>${q.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値 ${p.ev.toFixed(2)}</span>`).join('')} ${mark}`;
   }
-  return `<div class="rec"><div class="rec-h"><b>2連複（記録のみ・買わない）</b></div><div class="ev-sum">${body}</div><div class="rule">${esc(ruleText(QUINELLA_RULE))}</div></div>`;
+  return `<div class="rec main-bet"><div class="rec-h"><b>2連複の買い目（約2〜3分前に決定・通知／記録のみ）</b></div><div class="ev-sum">${body}</div><div class="rule">${esc(ruleText(QUINELLA_RULE))}</div></div>`;
 }
 
 // 根拠: 特徴量の値から、目立つ点を文章にする
@@ -498,12 +509,20 @@ function renderScore(rs) {
     const h = topHit(r, pr);
     win += h.win ? 1 : 0; ex1 += h.ex1 ? 1 : 0;
     const br = betResult(r, exactaPicks(r, pr));
-    if (br) { bets += br.cost / 100; ret += br.amount; hits += br.hit ? 1 : 0; }
+    if (SHOW_EXACTA) {
+      if (br) { bets += br.cost / 100; ret += br.amount; hits += br.hit ? 1 : 0; }
+      continue;
+    }
+    const q = r.botPick && r.botPick.q;   // 2連複（自動で決めた買い目）
+    if (q && q.state === 'buy') {
+      const paid = (r.payouts && r.payouts.quinella) || [];
+      for (const t of q.picks) { bets++; const a = (paid.find((x) => x.combo === t.combo) || {}).amount || 0; ret += a; hits += a ? 1 : 0; }
+    }
   }
   return `<section class="score"><h2>答え合わせ（${done.length}レース）</h2><div class="grid">
     <div><div class="k">1着の的中</div><div class="v">${pct(win / done.length)}<small>%</small></div></div>
     <div><div class="k">2連単 本命の的中</div><div class="v">${pct(ex1 / done.length)}<small>%</small></div></div>
-    <div><div class="k">買い目 ${bets}点 的中${hits}（1点${yen(stake())}）</div><div class="v">${bets ? pct(ret / (bets * 100)) : '-'}<small>%回収</small></div><div class="k">${bets ? `${ret / 100 * stake() - bets * stake() >= 0 ? '+' : ''}${yen(ret / 100 * stake() - bets * stake())}` : ''}</div></div>
+    <div><div class="k">${SHOW_EXACTA ? '' : '2連複 '}買い目 ${bets}点 的中${hits}（1点${yen(stake())}）</div><div class="v">${bets ? pct(ret / (bets * 100)) : '-'}<small>%回収</small></div><div class="k">${bets ? `${ret / 100 * stake() - bets * stake() >= 0 ? '+' : ''}${yen(ret / 100 * stake() - bets * stake())}` : ''}</div></div>
   </div></section>`;
 }
 
@@ -521,6 +540,7 @@ function renderRecord() {
 
 // 2連複（記録のみ）の仮想損益: 11/18 から、締切約2〜3分前に実際に決めた買い目だけで
 const QKEY = '2連複（記録のみ）';
+const SHOW_EXACTA = false;   // 2連単の買い目・損益は一旦隠す（2連複の記録に集中。2連単の判定は裏で記録を続けている）
 const Q_SIM_FROM = '2026-11-18';
 const Q_LIVE_FROM = '2026-11-18';
 // 自分の賭け金でオッズが下がる分: 2連複の売上は公開データに無いので、1レース20万円と仮定（券種別の売上の割合 0.5〜1.6% から）
@@ -644,8 +664,8 @@ function render() {
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
-  if (state.view === 'done') html += renderScore(rs) + renderSim() + renderSim(QKEY, '2連複の仮想損益（記録のみ・買わない）', Q_SIM_FROM, Q_LIVE_FROM,
-    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + renderRecord();
+  if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（記録のみ・買わない）', Q_SIM_FROM, Q_LIVE_FROM,
+    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
   if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;

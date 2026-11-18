@@ -413,6 +413,20 @@ class Live:
             qline = ("\n［記録のみ・買わない］2連複 " + " ".join(f"{p['combo']} {p['odds']:.1f}倍" for p in q["picks"])) if qbuy else ""
             if not NOTIFY.get("topic") or (o["state"] != "buy" and not qbuy):
                 continue
+            if not NOTIFY.get("exacta", True):   # 2連単は隠す設定（docs/notify.json の exacta: false）: 2連複だけ知らせる（2連単の判定は裏で記録を続ける）
+                if not qbuy:
+                    continue
+                det = " / ".join(f"{p['combo']} {p['odds']:.1f}倍・確率{p['p'] * 100:.1f}%・期待値{p['ev']:.2f}" for p in q["picks"])
+                dl = self.deadline_of(key)
+                left = f"\n締切まで約{max(1, int((dl - now).total_seconds() // 60))}分" if dl else ""
+                msg = {"topic": NOTIFY["topic"], "title": f"2連複 {' '.join(p['combo'] for p in q['picks'])}｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
+                       "message": f"{det}{left}\n（記録中・お金はかけない）", "tags": ["memo"], "priority": 4, "click": NOTIFY.get("page", "")}
+                try:
+                    res = self.s.post("https://ntfy.sh/", data=json.dumps(msg, ensure_ascii=False).encode("utf-8"), timeout=15)
+                    log(f"通知 {key} 2連複（{res.status_code}）")
+                except Exception as e:  # noqa: BLE001
+                    log("通知に失敗:", e)
+                continue
             if o["state"] != "buy":   # 2連複（記録のみ）だけのレース: 控えめに知らせる
                 msg = {"topic": NOTIFY["topic"], "title": f"記録のみ 2連複 {' '.join(p['combo'] for p in q['picks'])}｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
                        "message": "2連複の仮想記録です（買わなくてOK）" + qline.replace("\n", "\n", 1), "tags": ["memo"], "priority": 2, "click": NOTIFY.get("page", "")}
