@@ -1,6 +1,6 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
 // 古いファイルがスマホに残らないよう、ページと同じ版の印（?v=）を付けて読む
-const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, evPicks, QUINELLA_RULE, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
+const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, evPicks, QUINELLA_RULE, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -134,7 +134,7 @@ function mergeLive(races, live) {
   if (!live) return;
   for (const r of races) {
     const o = live.odds && live.odds[`${r.jcd}-${r.rno}`];
-    if (o && (o.t || o.e)) r.odds = { t: o.t || null, e: o.e || null, at: o.at ? new Date(o.at) : null, site: o.site || '', final: !!o.final };
+    if (o && (o.t || o.e)) r.odds = { t: o.t || null, e: o.e || null, q: o.q || null, at: o.at ? new Date(o.at) : null, site: o.site || '', final: !!o.final };
     const f = fastCache.get(`${r.jcd}-${r.rno}`);
     if (f && (!r.odds || !r.odds.at || f.at > r.odds.at)) r.odds = f;
     const bp = (live.picks && live.picks[`${r.jcd}-${r.rno}`]) || botCache.get(`${r.jcd}-${r.rno}`);
@@ -337,7 +337,7 @@ function raceDetail(r, pr) {
     const stats = [`勝率 ${f2(b.natWin)}`, `当地 ${f2(b.locWin)}`, `モーター ${b.motor2 !== null ? b.motor2.toFixed(1) : '-'}%`, `平均ST ${fmtST(b.avgST)}`];
     if (b.F) stats.push(`<span class="warn">F${b.F}</span>`);
     const p1 = pr.probs.win[i], p2 = pr.probs.top2[i];
-    const bar = (label, p) => `<div class="bar"><span>${label}</span><span class="track"><i style="width:${(p * 100).toFixed(1)}%"></i></span></div>`;
+    const bar = (label, p) => `<div class="bar"><span>${label}</span><span class="track"><i style="width:${(p * 100).toFixed(1)}%"></i></span><span class="bv">${pct(p)}%</span></div>`;
     return `<div class="boat">${chip(b.waku)}
       <div><div class="bn">${esc(b.name)}<small>${RANK_LABEL[b.rank] || ''} ${b.age ?? ''}歳 ${esc(b.branch)}</small></div>
         ${pre.length ? `<div class="bx">${pre.map((x) => `<span class="nb">${x}</span>`).join(' ')}</div>` : ''}
@@ -357,6 +357,16 @@ function raceDetail(r, pr) {
     return `<div class="${hit ? 'hit' : ''}">${comboHtml(t.combo)}</div><div class="p ${hit ? 'hit' : ''}">${pct(t.p, 1)}%</div><div class="o ${hit ? 'hit' : ''}">${right}</div>`;
   }).join('');
   const oddsAt = om ? `オッズ ${r.odds.site ? esc(r.odds.site) : r.odds.at ? hhmm(r.odds.at) : ''}時点${r.odds.final ? '（締切1分前）' : ''}` : '目安＝つり合いの倍率';
+  // 2連複: 確率の高い順（2連複のオッズがあれば期待値）
+  const qpaid = ((r.payouts && r.payouts.quinella) || []).map((x) => x.combo);
+  const qm = r.odds && r.odds.q ? quinellaMap(r.odds.q) : null;
+  const qbets = (pr.quinella || []).slice(0, 8).map((t) => {
+    const hit = qpaid.includes(t.combo);
+    const o = qm && qm[t.combo];
+    const right = o ? `<b>${o.toFixed(1)}</b>倍 期待値<b class="${o * t.p >= 1 ? 'good' : ''}">${(o * t.p).toFixed(2)}</b>` : `目安 <b>${(1 / t.p).toFixed(1)}</b>倍`;
+    return `<div class="${hit ? 'hit' : ''}">${comboHtml(t.combo)}</div><div class="p ${hit ? 'hit' : ''}">${pct(t.p, 1)}%</div><div class="o ${hit ? 'hit' : ''}">${right}</div>`;
+  }).join('');
+  const qAt = qm ? oddsAt : '目安＝つり合いの倍率';
 
   let result = '';
   if (r.hasResult) {
@@ -369,6 +379,7 @@ function raceDetail(r, pr) {
     ${evHtml(r, pr)}
     <h3>2連単の確率<small>${oddsAt}</small></h3>
     <div class="bets">${bets}</div>
+    ${qbets ? `<h3>2連複の確率<small>${qAt}</small></h3><div class="bets">${qbets}</div>` : ''}
     ${rows}
     ${tenkaiHtml(pr)}
     <h3>予想の根拠</h3>
