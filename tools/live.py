@@ -228,13 +228,24 @@ class Live:
         except Exception as e:  # noqa: BLE001
             log("今日の出走表の保存に失敗:", e)
         sched = []
+        # 締切時刻: 公開データで途中から締切時刻が抜ける（null になる）レースがあるため、一度わかった時刻は覚えておく
+        #   （docs/live の deadlines に残す。サイトも時刻が抜けたときはここから補う）
+        dls = self.store.setdefault("deadlines", {})
         for jcd, st in (j.get("programs", {}).get("stadiums") or {}).items():
             for rno, rc in (st.get("races") or {}).items():
-                if (rc.get("date") or "") != ymd or not rc.get("closed_at"):
+                key = f"{int(jcd)}-{int(rno)}"
+                if (rc.get("date") or "") != ymd:
+                    continue
+                if rc.get("closed_at"):
+                    hhmm = rc["closed_at"][11:16]
+                    if dls.get(key) != hhmm:
+                        dls[key] = hhmm
+                        self.dirty = True
+                elif not dls.get(key):
                     continue
                 pv = (rc.get("preview") or {}).get("racers") or {}
                 has = sum(1 for x in pv.values() if x.get("exhibition_time") is not None and x.get("course_number") is not None)
-                dl = datetime.fromisoformat(rc["closed_at"]).replace(tzinfo=JST)
+                dl = datetime.fromisoformat(f"{ymd} {dls[key]}:00").replace(tzinfo=JST)
                 sched.append({"jcd": int(jcd), "rno": int(rno), "deadline": dl, "openapi_has": has >= len(pv) and has > 0})
         sched.sort(key=lambda x: x["deadline"])
         self.schedule = sched

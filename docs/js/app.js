@@ -33,7 +33,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 function jstToday() { return new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10); }
 function addDays(ymd, n) { const d = new Date(`${ymd}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 const compact = (ymd) => ymd.replace(/-/g, '');
-function deadline(r) { return new Date(`${r.date}T${r.closedAt || '23:59'}:00+09:00`); }
+// 締切時刻が分からないレース: 結果が出ていれば終わったもの（0:00 扱い）、まだなら最後に回す
+function deadline(r) { return new Date(`${r.date}T${r.closedAt || (r.hasResult ? '00:00' : '23:59')}:00+09:00`); }
 function minsLeft(r) { return (deadline(r) - Date.now()) / 60000; }
 function hhmm(d) { if (!d) return '--:--'; const x = new Date(d.getTime() + 9 * 3600e3); return x.toISOString().slice(11, 16); }
 const pct = (p, digits = 0) => (p * 100).toFixed(digits);
@@ -94,8 +95,25 @@ async function loadLive(ymd) {
   }
 }
 
+// 締切時刻の穴埋め: 公開データで途中から締切時刻が抜ける（null になる）ことがあるため、
+// 自動判定が覚えている時刻（docs/live の deadlines）→ この端末で前に見た時刻 の順で補う
+function fillClosed(races, live) {
+  const ck = `closed-${state.date}`;
+  let seen = {};
+  try { seen = JSON.parse(localStorage.getItem(ck) || '{}'); } catch (e) { seen = {}; }
+  const dl = (live && live.deadlines) || {};
+  let changed = false;
+  for (const r of races) {
+    const k = `${r.jcd}-${r.rno}`;
+    if (r.closedAt) { if (seen[k] !== r.closedAt) { seen[k] = r.closedAt; changed = true; } continue; }
+    r.closedAt = dl[k] || seen[k] || '';
+  }
+  if (changed) { try { localStorage.setItem(ck, JSON.stringify(seen)); } catch (e) { /* 保存できなくても表示はできる */ } }
+}
+
 // 自前で取った直前情報（公式サイトから数分おき）で、公開データにまだ無い分を埋める
 function mergeLive(races, live) {
+  fillClosed(races, live);
   state.liveAt = live && live.updated ? new Date(live.updated) : null;
   state.liveCount = 0;
   if (!live) return;
