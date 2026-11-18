@@ -42,8 +42,8 @@ EDGE = [1.0, 1.2]
 
 
 # 券種ごとの候補（--bet-type）。2連単以外はオッズの幅と確率の下限を券種に合わせる
-BT_MAXO = {"exacta": MAXO, "quinella": [15.0, 30.0, 60.0], "trio": [30.0, 60.0, 100.0, 200.0], "trifecta": [30.0, 60.0, 100.0, 200.0, 500.0]}
-BT_MINP = {"exacta": MINP, "quinella": [0.0, 0.04, 0.07, 0.1, 0.15], "trio": [0.0, 0.01, 0.02, 0.04, 0.07], "trifecta": [0.0, 0.005, 0.01, 0.02, 0.04]}
+BT_MAXO = {"exacta": MAXO, "quinella": [15.0, 30.0, 60.0], "trio": [30.0, 60.0, 100.0, 200.0], "trifecta": [30.0, 60.0, 100.0, 200.0, 500.0], "quinella_place": [5.0, 10.0, 20.0, 40.0]}
+BT_MINP = {"exacta": MINP, "quinella": [0.0, 0.04, 0.07, 0.1, 0.15], "trio": [0.0, 0.01, 0.02, 0.04, 0.07], "trifecta": [0.0, 0.005, 0.01, 0.02, 0.04], "quinella_place": [0.0, 0.1, 0.2, 0.3, 0.4]}
 
 
 def rule_list(h1=False, bt="exacta"):
@@ -86,7 +86,7 @@ def main():
     ap.add_argument("--min-odds", type=float, default=0.0, help="この倍率以下は買わない（買い方の候補を「◯倍超」のものだけにする）")
     ap.add_argument("--out", default=str(ROOT / "docs" / "data" / "fair.json"))
     ap.add_argument("--universe", default="all", choices=["all", "h1"], help="買い方の系統: all=今まで通り / h1=1号艇が1着の買い目だけ")
-    ap.add_argument("--bet-type", default="exacta", choices=["exacta", "quinella", "trio", "trifecta"], help="券種（2連単以外は比べる用）")
+    ap.add_argument("--bet-type", default="exacta", choices=["exacta", "quinella", "trio", "trifecta", "quinella_place"], help="券種（2連単以外は比べる用）")
     a = ap.parse_args()
     bt = a.bet_type
     files = sorted(Path(a.preds).rglob("fair_*.pkl"))
