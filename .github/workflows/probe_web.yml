@@ -1,0 +1,33 @@
+name: 試し（ページの中身を見る）
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: 'URL（空白区切り）'
+        required: true
+      grep:
+        description: '探す言葉（正規表現）'
+        default: '一周|周回|まわり足|回り足|直線|tenji|lap'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          URLS: ${{ inputs.urls }}
+          PAT: ${{ inputs.grep }}
+        run: |
+          for u in $URLS; do
+            echo "=================== $u"
+            curl -sSL -A "Mozilla/5.0 (boatrace-yosou research)" --max-time 30 "$u" -o p.html -w "%{http_code} %{size_download} %{url_effective}\n" || true
+            python3 - <<'P'
+          import re, os
+          s = open('p.html', encoding='utf-8', errors='replace').read()
+          pat = os.environ['PAT']
+          links = sorted(set(re.findall(r'href="([^"]+)"', s)))
+          print('links matching:', [l for l in links if re.search(pat, l, re.I)][:40])
+          t = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', re.sub(r'(?s)<script.*?</script>|<style.*?</style>', ' ', s)))
+          for m in list(re.finditer(pat, t))[:12]:
+              print('…', t[max(0, m.start() - 120): m.end() + 200])
+          print('robots/notice:', re.findall(r'(?i)(スクレイピング|自動取得|転載|無断)[^。]{0,80}', t)[:5])
+          P
+          done
