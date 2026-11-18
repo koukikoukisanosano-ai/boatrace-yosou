@@ -1,0 +1,48 @@
+name: オリジナル展示データ（一周・まわり足・直線）を集める
+
+on:
+  schedule:
+    - cron: '10 8 * * *'    # 17:10（日本時間）昼の部の後
+    - cron: '20 12 * * *'   # 21:20（日本時間）夜の部の後
+  workflow_dispatch:
+    inputs:
+      venues:
+        description: 'この場だけ（例 11,12。空なら全部）'
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: laps
+  cancel-in-progress: false
+
+jobs:
+  laps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TZ: Asia/Tokyo
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 集める
+        run: python tools/fetch_laps.py --venues "${{ inputs.venues }}"
+      - name: 保存
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/laps
+          git diff --cached --quiet && { echo "変更なし"; exit 0; }
+          git commit -q -m "オリジナル展示データ $(date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3 4 5 6; do
+            if git pull -q --rebase -X theirs && git push -q; then echo "保存しました"; exit 0; fi
+            git rebase --abort 2>/dev/null || true
+            sleep $((i * 5))
+          done
+          exit 1
