@@ -66,6 +66,7 @@ button { font: inherit; color: inherit; }
 }
 .top-row { display: flex; align-items: baseline; gap: 10px; }
 .top h1 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: 0.04em; }
+.top h1 small { font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 6px; letter-spacing: 0; }
 .datenav { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 .datenav button {
   border: 1px solid var(--line); background: var(--surface); border-radius: 8px; min-width: 34px; height: 32px; padding: 0 8px;
@@ -91,6 +92,7 @@ main { padding: 6px 16px 0; max-width: 720px; margin: 0 auto; }
 
 /* レース一覧 */
 .race { border-bottom: 1px solid var(--line); }
+.race.is-buy { box-shadow: inset 4px 0 0 var(--ok); }
 .race-head {
   display: grid; grid-template-columns: 62px 1fr auto; grid-template-areas: "time name left" "time strip strip" "time picks picks";
   column-gap: 12px; row-gap: 5px; width: 100%; text-align: left; background: none; border: 0; padding: 12px 0; cursor: pointer;
@@ -246,7 +248,7 @@ div.rec .rule { font-size: 11px; color: var(--faint); margin-top: 2px; }
 <body>
 <header class="top">
   <div class="top-row">
-    <h1>競艇予想</h1>
+    <h1>競艇予想 <small>2連複・割れ狙い</small></h1>
     <div class="datenav">
       <button type="button" id="prev" aria-label="前の日">‹</button>
       <span class="d" id="dateLabel">--/--</span>

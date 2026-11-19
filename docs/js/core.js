@@ -717,6 +717,23 @@ export function wideMap(k) {
   for (let a = 1; a <= 6; a++) for (let b = a + 1; b <= 6; b++) { const v = k[i]; out[`${a}=${b}`] = Array.isArray(v) ? v[0] : v; i++; }
   return out;
 }
+// 2連複「予想と人気が割れた時」（記録・通知のメイン）: 予想の確率1番の2連複が、オッズの1番人気と違い、5倍以上ついていたら1点買う
+//   2026年1〜10月の公平な検証（確定オッズ）で 5〜10倍 109%・10〜20倍 136%、的中率18%前後・1日9〜10レース
+export const SPLIT_MIN_ODDS = 5;
+export function splitPick(pr, race) {
+  const om = race && race.odds ? quinellaMap(race.odds.q) : null;
+  if (!pr || !pr.base || !om) return null;
+  const r = evPicks(pr, race, { t: 0, minp: 0, maxo: 1e9, mino: 0, k: 1, edge: 0, alpha: 1, byProb: true }, 'quinella');
+  if (!r || !r.top.length) return null;
+  const top = r.top[0];
+  let fav = null;
+  for (const [c, o] of Object.entries(om)) if (o > 0 && (!fav || o < fav.odds)) fav = { combo: c, odds: o };
+  const buy = fav && top.combo !== fav.combo && top.odds >= SPLIT_MIN_ODDS;
+  return { state: buy ? 'buy' : 'pass', why: !fav ? 'no-odds' : top.combo === fav.combo ? 'same' : top.odds < SPLIT_MIN_ODDS ? 'low' : 'split',
+    picks: buy ? [{ combo: top.combo, p: +top.p.toFixed(4), odds: top.odds, ev: +(top.p * top.odds).toFixed(3) }] : [],
+    top: { combo: top.combo, p: +top.p.toFixed(4), odds: top.odds }, fav };
+}
+
 // 3連複のオッズ（20通り、1〜6 から3つの組み合わせの辞書順）→ {'1=2=3': 倍率}
 export function trioMap(f) {
   if (!f) return null;

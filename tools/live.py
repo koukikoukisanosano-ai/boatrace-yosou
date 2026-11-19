@@ -412,6 +412,26 @@ class Live:
                 self.store["picks"][key]["k"] = o["k"]           # 拡連複（記録のみ・通知はしない）
             if o.get("f"):
                 self.store["picks"][key]["f"] = o["f"]           # 3連複（記録のみ・通知はしない）
+            d = o.get("d") or {}
+            if d:
+                self.store["picks"][key]["d"] = d                # 2連複「予想と人気が割れた時」（メイン）
+            if NOTIFY.get("mode") == "split":   # 通知はこの買い方だけ（docs/notify.json の mode: split）
+                self.dirty = True
+                if d.get("state") != "buy" or not NOTIFY.get("topic"):
+                    continue
+                t, fav = d["picks"][0], d.get("fav") or {}
+                dl = self.deadline_of(key)
+                left = f"\n締切まで約{max(1, int((dl - now).total_seconds() // 60))}分" if dl else ""
+                msg = {"topic": NOTIFY["topic"], "title": f"2連複 {t['combo']} {t['odds']:.1f}倍｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
+                       "message": f"予想の1番 {t['combo']}（確率{t['p'] * 100:.1f}%・{t['odds']:.1f}倍）\n人気の1番 {fav.get('combo', '-')}（{fav.get('odds', 0):.1f}倍）{left}",
+                       "tags": ["dart"], "priority": 4, "click": NOTIFY.get("page", "")}
+                try:
+                    res = self.s.post("https://ntfy.sh/", data=json.dumps(msg, ensure_ascii=False).encode("utf-8"), timeout=15)
+                    log(f"通知 {key} 2連複割れ {t['combo']}（{res.status_code}）")
+                    self.stats["notify"] = self.stats.get("notify", 0) + 1
+                except Exception as e:  # noqa: BLE001
+                    log("通知に失敗:", e)
+                continue
             self.dirty = True
             qbuy = q.get("state") == "buy"
             qline = ("\n［記録のみ・買わない］2連複 " + " ".join(f"{p['combo']} {p['odds']:.1f}倍" for p in q["picks"])) if qbuy else ""

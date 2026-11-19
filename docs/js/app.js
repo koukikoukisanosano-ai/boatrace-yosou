@@ -1,6 +1,6 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
 // 古いファイルがスマホに残らないよう、ページと同じ版の印（?v=）を付けて読む
-const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
+const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, SPLIT_MIN_ODDS, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -239,6 +239,8 @@ function filtered() {
   let rs = state.races.filter((r) => state.venue === 0 || r.jcd === state.venue);
   if (state.view === 'upcoming') rs = rs.filter((r) => minsLeft(r) > -KEEP_MIN);
   else rs = rs.filter((r) => minsLeft(r) <= -KEEP_MIN || (r.hasResult && minsLeft(r) <= 0)).reverse();
+  // 絞った表示: 見送りのレースは隠す（「見送りも表示」で出す）
+  if (FOCUS && !state.showPass) rs = rs.filter((r) => !(r.botPick && r.botPick.d && r.botPick.d.state === 'pass') && !(r.hasResult && !(r.botPick && r.botPick.d)));
   return rs;
 }
 
@@ -290,7 +292,8 @@ function raceRow(r) {
   } else {
     picks = '<span class="picks">予想できません</span>';
   }
-  return `<article class="race" id="r-${r.id}">
+  if (FOCUS) picks = `<span class="picks">${splitTag(r)}</span>`, strip = '';
+  return `<article class="race${FOCUS && r.botPick && r.botPick.d && r.botPick.d.state === 'buy' ? ' is-buy' : ''}" id="r-${r.id}">
     <button type="button" class="race-head" aria-expanded="${open}" data-id="${r.id}">
       <span class="rh-time"><span class="t">${r.closedAt || '--:--'}</span><span class="r">${r.rno}R</span></span>
       <span class="rh-name"><span class="v">${esc(r.venue)}</span><span class="sub">${esc(r.subtitle || '')}</span></span>
@@ -298,7 +301,7 @@ function raceRow(r) {
       ${strip}
       ${picks}
     </button>
-    ${open ? `<div class="race-body">${raceDetail(r, pr)}</div>` : ''}
+    ${open ? `<div class="race-body">${FOCUS ? splitDetail(r) : raceDetail(r, pr)}</div>` : ''}
   </article>`;
 }
 
@@ -439,6 +442,50 @@ function evHtml(r, pr) {
   if (!SHOW_EXACTA) return quinellaHtml(r);
   return `<div class="rec main-bet"><div class="rec-h"><b>2連単の買い目${x.bot ? '（約2〜3分前に決定・通知）' : ''}</b>${past}</div>${body}<div class="rule">${esc(ruleText(rule))}</div></div>${quinellaHtml(r)}`;
 }
+// 2連複「予想と人気が割れた時」: 一覧の札・詳細・当たり外れ
+function splitResult(r) {
+  const d = r.botPick && r.botPick.d;
+  if (!d || d.state !== 'buy' || !r.hasResult) return null;
+  const paid = (r.payouts && r.payouts.quinella) || [];
+  const a = (paid.find((x) => x.combo === d.picks[0].combo) || {}).amount || 0;
+  return { hit: a > 0, odds: a / 100 };
+}
+function splitTag(r) {
+  const d = r.botPick && r.botPick.d;
+  if (!d) return r.hasResult ? '<span class="bet pass">判定なし</span>' : minsLeft(r) > 3.5 ? '<span class="bet pass">締切2〜3分前に判定</span>' : '<span class="bet pass">判定中</span>';
+  if (d.state !== 'buy') return `<span class="bet pass">見送り（${d.why === 'same' ? '予想と人気が同じ' : d.why === 'low' ? `${SPLIT_MIN_ODDS}倍未満` : 'オッズなし'}）</span>`;
+  const t = d.picks[0], res = splitResult(r);
+  const mark = res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? `的中 ${res.odds.toFixed(1)}倍 +${yen(res.odds * stake() - stake())}` : '外れ'}</span>` : '';
+  return `<span class="bet buy">買い 2連複 <b class="num">${t.combo}</b> ${t.odds.toFixed(1)}倍 ${yen(stake())}</span>${mark}`;
+}
+function splitDetail(r) {
+  const d = r.botPick && r.botPick.d;
+  if (!d) return '<div class="note">締切の約2〜3分前に、その時のオッズで判定して通知します。</div>';
+  const t = d.top, f = d.fav || {};
+  const res = splitResult(r);
+  const paid = (r.payouts && r.payouts.quinella) || [];
+  const came = r.hasResult && paid.length ? `<div class="k">結果の2連複: <b class="num">${paid.map((x) => x.combo).join(' ')}</b> ${paid.map((x) => `${(x.amount / 100).toFixed(1)}倍`).join(' ')}</div>` : '';
+  return `<div class="rec main-bet"><div class="rec-h"><b>${d.state === 'buy' ? '買い' : '見送り'}</b>${res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? '的中' : '外れ'}</span>` : ''}</div>
+    <div class="ev-sum"><span>予想の1番 <b class="num">${t.combo}</b> 確率${pct(t.p, 1)}%・${t.odds ? t.odds.toFixed(1) : '-'}倍</span><span>人気の1番 <b class="num">${f.combo || '-'}</b> ${f.odds ? f.odds.toFixed(1) : '-'}倍</span></div>
+    ${came}<div class="rule">予想の1番と人気の1番が違い、予想の1番が${SPLIT_MIN_ODDS}倍以上なら1点買い（締切約2〜3分前のオッズで判定）</div></div>`;
+}
+function splitScore(rs) {
+  let bets = 0, hits = 0, ret = 0, n = 0;
+  for (const r of rs) {
+    const d = r.botPick && r.botPick.d;
+    if (!d || !r.hasResult) continue;
+    n++;
+    const x = splitResult(r);
+    if (x) { bets++; hits += x.hit ? 1 : 0; ret += x.odds; }
+  }
+  if (!n) return '';
+  return `<section class="score"><h2>今日の答え合わせ（判定${n}レース）</h2><div class="grid">
+    <div><div class="k">買い</div><div class="v">${bets}<small>点</small></div></div>
+    <div><div class="k">的中</div><div class="v">${hits}<small>本</small></div><div class="k">${bets ? `${pct(hits / bets)}%` : ''}</div></div>
+    <div><div class="k">回収率（1点${yen(stake())}）</div><div class="v">${bets ? pct(ret / bets) : '-'}<small>%</small></div><div class="k">${bets ? `${ret * stake() - bets * stake() >= 0 ? '+' : ''}${yen(ret * stake() - bets * stake())}` : ''}</div></div>
+  </div></section>`;
+}
+
 // 一覧の札: 2連複の買い目（自動で決めたもの）と当たり外れ
 function quinellaTag(r) {
   const q = r.botPick && r.botPick.q;
@@ -566,7 +613,11 @@ function renderRecord() {
 
 // 2連複（記録のみ）の仮想損益: 11/18 から、締切約2〜3分前に実際に決めた買い目だけで
 const QKEY = '2連複（記録のみ）';
-const SHOW_EXACTA = false;   // 2連単の買い目・損益は一旦隠す（2連複の記録に集中。2連単の判定は裏で記録を続けている）
+const SHOW_EXACTA = false;
+// この買い方だけに絞った表示（2連複「予想と人気が割れた時」）。ほかの情報は隠す（判定と記録は裏で続けている）
+const FOCUS = true;
+const DKEY = '2連複 予想と人気が割れた時';
+const D_SIM_FROM = '2026-11-20';   // 2連単の買い目・損益は一旦隠す（2連複の記録に集中。2連単の判定は裏で記録を続けている）
 const Q_SIM_FROM = '2026-11-18';
 const Q_LIVE_FROM = '2026-11-18';
 // 自分の賭け金でオッズが下がる分: 2連複の売上は公開データに無いので、1レース20万円と仮定（券種別の売上の割合 0.5〜1.6% から）
@@ -610,7 +661,7 @@ function simulate(start, key = REC_KEY, from = SIM_FROM, liveFrom = '') {
     // 1日分をまとめて: 点数ぶん買って、払戻の合計（100円あたり）
     const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
     if (st < 100) break;
-    const rr = key === QKEY ? qAdjRet(r, st) : key === KKEY ? qAdjRet(r, st, K_POOL) : key === FKEY ? qAdjRet(r, st, F_POOL) : r.ret;
+    const rr = key === QKEY || key === DKEY ? qAdjRet(r, st) : key === KKEY ? qAdjRet(r, st, K_POOL) : key === FKEY ? qAdjRet(r, st, F_POOL) : r.ret;
     bank += st * (rr / 100 - r.bets); cost += st * r.bets; ret += st * rr / 100; bets += r.bets; raw += st * r.ret / 100;
     peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
     push(d, liveFrom && x.date < liveFrom ? 1 : 2);
@@ -698,11 +749,17 @@ function render() {
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
-  if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', Q_SIM_FROM, Q_LIVE_FROM,
+  if (FOCUS && state.view === 'done') html += splitScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue)) + renderSim(DKEY, '仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', D_SIM_FROM, D_SIM_FROM,
+    '<div class="k">締切約2〜3分前に実際に決めた買い目とその時のオッズで計算。2連複の売上を1レース20万円と仮定して、自分の賭け金でオッズが下がる分を差し引いています（翌朝に前日分を記録）</div>', true);
+  else if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', Q_SIM_FROM, Q_LIVE_FROM,
     '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + renderSim(KKEY, '拡連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', K_SIM_FROM, K_SIM_FROM,
     '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズ（幅の下限）で計算。拡連複は売上がとても少ないので、1レース10万円と厳しめに仮定して差し引いています（翌朝に前日分を記録）</div>', true) + renderSim(FKEY, '3連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', F_SIM_FROM, F_SIM_FROM,
     '<div class="k">確率が一番高い3連複で期待値1.2以上のときだけ。締切約2〜3分前に実際に決めた買い目とその時のオッズで計算し、3連複の売上を1レース50万円と仮定して差し引いています（翌朝に前日分を記録）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
-  if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
+  if (!rs.length) html += `<div class="note">${FOCUS && !state.showPass ? (state.view === 'upcoming' ? 'これから締切の買いのレースはありません（判定は締切約2〜3分前）。' : '買いになったレースはまだありません。') : state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
+  if (FOCUS) {
+    const nPass = state.races.filter((r) => (state.venue === 0 || r.jcd === state.venue) && r.botPick && r.botPick.d && r.botPick.d.state === 'pass').length;
+    html += `<div class="note"><button type="button" class="linkish" id="togglePass">${state.showPass ? '見送りのレースを隠す' : `見送りのレースも表示（今日${nPass}レース）`}</button></div>`;
+  }
   html += rs.map(raceRow).join('');
   list.innerHTML = html;
   renderFooter();
@@ -712,6 +769,12 @@ function renderFooter() {
   const m = state.model;
   if (!m) return;
   const lines = [];
+  if (FOCUS) {
+    lines.push(`買い方: 予想の確率1番の2連複が、オッズの1番人気と違い、${SPLIT_MIN_ODDS}倍以上ついていたら1点買う（締切約2〜3分前に判定・通知）。2026年1〜10月の公平な検証（確定オッズ）で5〜10倍は回収率109%・的中率18%。実際に決める時点のオッズでは下がる見込みのため、今は記録で確かめている段階です。`);
+    lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。`);
+    $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
+    return;
+  }
   const F = state.fair && state.fair.total;
   lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。${m.bet ? `2連単の買い方: ${esc(ruleText(m.bet.rule))}` : ''}${F ? `（公平な検証 回収${pct(F.roi)}%、95%の範囲 ${pct(F.ci95[0])}〜${pct(F.ci95[1])}%）` : ''}`);
   lines.push('予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。');
@@ -741,6 +804,7 @@ document.addEventListener('click', (e) => {
     if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: 'start' });
     return;
   }
+  if (e.target.closest('#togglePass')) { state.showPass = !state.showPass; render(); return; }
   const vb = e.target.closest('[data-venue]');
   if (vb) { state.venue = +vb.dataset.venue; render(); return; }
   const mb = e.target.closest('[data-mode]');

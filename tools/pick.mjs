@@ -3,7 +3,7 @@
 // 出力（1行1レースのJSON）: {key, venue, rno, closedAt, state: buy|pass|none, picks: [{combo, p, odds, ev}]}
 import fs from 'node:fs';
 import path from 'node:path';
-import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE } from '../docs/js/core.js';
+import { normalizeDay, prepareModel, predictRace, Snapshot, previewState, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, splitPick } from '../docs/js/core.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const [dayPath, livePath, keysArg] = process.argv.slice(2);
@@ -41,6 +41,9 @@ for (const r of races) {
       probs: Object.fromEntries(Object.entries(res.probs).map(([k, v]) => [k, +v.toPrecision(4)])) };  // 30通りの確率（段階3: 確定オッズの動きの分析用）
     // 2連複（記録のみ）
     const rq = pr && r.odds && r.odds.q ? evPicks(pr, r, QUINELLA_RULE, 'quinella') : null;
+    // 2連複「予想と人気が割れた時」（メイン）
+    const sp = pr && r.odds && r.odds.q ? splitPick(pr, r) : null;
+    if (sp) out.d = sp;
     // 3連複（記録のみ）
     const rf = pr && r.odds && r.odds.f ? evPicks(pr, r, TRIO_RULE, 'trio') : null;
     if (rf) out.f = { state: rf.picks.length ? 'buy' : 'pass', picks: rf.picks.map((x) => ({ combo: x.combo, p: +x.p.toFixed(4), odds: x.odds, ev: +x.ev.toFixed(3) })) };
