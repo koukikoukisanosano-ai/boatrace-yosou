@@ -87,7 +87,7 @@ def main():
                 if o and bt == "win":
                     o = o
                 O[bt].append(np.array([x if isinstance(x, (int, float)) and x else np.nan for x in o], np.float32) if o and len(o) == len(keys) else np.full(len(keys), np.nan, np.float32))
-                pm = {x["combination"]: x["amount"] / 100 for x in (pays.get(bt) or [])}
+                pm = {x["combination"]: (x.get("amount") or 0) / 100 for x in (pays.get(bt) or []) if x.get("combination")}
                 Y[bt].append(np.array([pm.get(k, 0.0) for k in keys], np.float32))
     arr = {k: np.array(v) for k, v in cols.items()}
     for bt in KEYS:
