@@ -19,6 +19,7 @@ const recs = fs.existsSync(researchFile) ? (JSON.parse(fs.readFileSync(researchF
 // 2連単の買い方（学習で選んだ決め方: model.bet）。予想はオッズを混ぜない
 const EV_RULES = model.bet ? [{ kind: 'exacta', title: '2連単 期待値の買い目（メイン）', rule: { ...model.bet.rule, alpha: 1 } }] : [];
 const QKEY = '2連複（記録のみ）';
+const KKEY = '拡連複（記録のみ）';
 const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 
 for (const ymd of dates) {
@@ -86,6 +87,18 @@ for (const ymd of dates) {
         if (t.combo.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
         const a = pay(r.payouts.quinella || [], t.combo);
         if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, n]); }   // 当たった目の払戻倍率と、そのレースで買った点数（自分の賭け金でオッズが下がる分を後で差し引く用）
+      }
+    }
+    // 拡連複（記録のみ）: 同じく実際に決めた買い目（docs/live の picks[].k）。当たりは1レースで複数ありうる
+    if (lq && lq.k && lq.k.state) {
+      const x = s.rec[KKEY] || (s.rec[KKEY] = { bets: 0, hits: 0, ret: 0, races: 0, hitOdds: [] });
+      x.races++;
+      const n = (lq.k.picks || []).length;
+      for (const t of lq.k.picks || []) {
+        x.bets++;
+        if (t.combo.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
+        const a = pay(r.payouts.quinella_place || [], t.combo);
+        if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, n]); }
       }
     }
     // おすすめの買い方の成績

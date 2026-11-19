@@ -710,6 +710,16 @@ export function quinellaMap(q) {
   return out;
 }
 
+// 拡連複のオッズ（15通り、[下限, 上限]）→ {'1=2': 下限}（控えめに下限で見る。tools/research_eval.py と同じ）
+export function wideMap(k) {
+  if (!k) return null;
+  const out = {}; let i = 0;
+  for (let a = 1; a <= 6; a++) for (let b = a + 1; b <= 6; b++) { const v = k[i]; out[`${a}=${b}`] = Array.isArray(v) ? v[0] : v; i++; }
+  return out;
+}
+// 拡連複（記録のみ）の買い方: 2026年3〜10月の公平な検証で一番だった形（確定オッズで155%）
+export const WIDE_RULE = { t: 1.75, minp: 0, maxo: 40, mino: 10, k: 2, edge: 0, alpha: 1 };
+
 // 2連複（記録のみ・お金はかけない）の買い方: 2026年3〜10月の公平な検証で選ばれた形（確定オッズで149%）。
 // 締切約2〜3分前のオッズで選んだ実際の成績を記録して、1〜2週間で切り替えるか決める
 export const QUINELLA_RULE = { t: 2.0, minp: 0, maxo: 60, mino: 10, k: 3, edge: 1, alpha: 1 };
@@ -719,7 +729,7 @@ export const QUINELLA_RULE = { t: 2.0, minp: 0, maxo: 60, mino: 10, k: 3, edge: 
 //   kind: 'trifecta'（3連単のオッズ）/ 'exacta'（2連単のオッズ）
 export function evPicks(pr, race, rule, kind) {
   if (!pr || !pr.base || !race.odds) return null;
-  const om = kind === 'exacta' ? exactaMap(race.odds.e) : kind === 'quinella' ? quinellaMap(race.odds.q) : oddsMap(race.odds.t);
+  const om = kind === 'exacta' ? exactaMap(race.odds.e) : kind === 'quinella' ? quinellaMap(race.odds.q) : kind === 'wide' ? wideMap(race.odds.k) : oddsMap(race.odds.t);
   if (!om) return null;
   const alpha = rule.alpha ?? 1;
   const boats = pr.boats;
@@ -728,6 +738,11 @@ export function evPicks(pr, race, rule, kind) {
   const P = {};
   perms.forEach(([a, b, c], k) => {
     const wa = boats[a].waku, wb = boats[b].waku;
+    if (kind === 'wide') {   // 3着までに2艇とも入る: 1-2着・1-3着・2-3着の3通りに足す
+      const wc = boats[c].waku;
+      for (const [x, y] of [[wa, wb], [wa, wc], [wb, wc]]) { const kk = `${Math.min(x, y)}=${Math.max(x, y)}`; P[kk] = (P[kk] || 0) + tri[k]; }
+      return;
+    }
     const key = kind === 'exacta' ? `${wa}-${wb}` : kind === 'quinella' ? `${Math.min(wa, wb)}=${Math.max(wa, wb)}` : `${wa}-${wb}-${boats[c].waku}`;
     P[key] = (P[key] || 0) + tri[k];
   });

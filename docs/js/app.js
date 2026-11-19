@@ -1,6 +1,6 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
 // 古いファイルがスマホに残らないよう、ページと同じ版の印（?v=）を付けて読む
-const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, evPicks, QUINELLA_RULE, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
+const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, evPicks, QUINELLA_RULE, WIDE_RULE, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -460,7 +460,20 @@ function quinellaHtml(r) {
     const mark = hit === null ? '' : `<span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? `的中 ${(hit / 100).toFixed(1)}倍` : '外れ'}</span>`;
     body = `<b class="num">${q.picks.map((p) => p.combo).join('　')}</b>${q.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値 ${p.ev.toFixed(2)}</span>`).join('')} ${mark}`;
   }
-  return `<div class="rec main-bet"><div class="rec-h"><b>2連複の買い目（約2〜3分前に決定・通知／記録のみ）</b></div><div class="ev-sum">${body}</div><div class="rule">${esc(ruleText(QUINELLA_RULE))}</div></div>`;
+  return `<div class="rec main-bet"><div class="rec-h"><b>2連複の買い目（約2〜3分前に決定・通知／記録のみ）</b></div><div class="ev-sum">${body}</div><div class="rule">${esc(ruleText(QUINELLA_RULE))}</div></div>${wideHtml(r)}`;
+}
+// 拡連複（記録のみ・通知なし）: 同じ時に決めた買い目。オッズは幅の下限で見る
+function wideHtml(r) {
+  const q = r.botPick && r.botPick.k;
+  if (!q || !q.state) return '';
+  let body = '<b>見送り</b>';
+  if (q.state === 'buy') {
+    const paid = (r.payouts && r.payouts.quinella_place) || [];
+    const hit = r.hasResult ? q.picks.map((p) => (paid.find((x) => x.combo === p.combo) || {}).amount || 0).reduce((a, b) => a + b, 0) : null;
+    const mark = hit === null ? '' : `<span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? `的中 計${(hit / 100).toFixed(1)}倍` : '外れ'}</span>`;
+    body = `<b class="num">${q.picks.map((p) => p.combo).join('　')}</b>${q.picks.map((p) => `<span>${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍〜・期待値 ${p.ev.toFixed(2)}</span>`).join('')} ${mark}`;
+  }
+  return `<div class="rec"><div class="rec-h"><b>拡連複の買い目（記録のみ・通知なし）</b></div><div class="ev-sum">${body}</div><div class="rule">${esc(ruleText(WIDE_RULE))}</div></div>`;
 }
 
 // 根拠: 特徴量の値から、目立つ点を文章にする
@@ -546,10 +559,14 @@ const Q_LIVE_FROM = '2026-11-18';
 // 自分の賭け金でオッズが下がる分: 2連複の売上は公開データに無いので、1レース20万円と仮定（券種別の売上の割合 0.5〜1.6% から）
 // 当たった目の確定倍率 O、その目への他の人の票 x = 0.75T/O に自分の st が加わると → 0.75(T+自分の全額)/(x+st)
 const Q_POOL = 200000, TAKE = 0.75;
-function qAdjRet(r, st) {   // 1日分の払戻（100円あたりの合計）を、自分の賭け金で下がった倍率で計算し直す
+// 拡連複: 売上は2連複よりさらに少ない（券種別の割合 0.3% ほど）ので、1レース10万円と厳しめに仮定
+const KKEY = '拡連複（記録のみ）';
+const K_POOL = 100000;
+const K_SIM_FROM = '2026-11-19';
+function qAdjRet(r, st, pool = Q_POOL) {   // 1日分の払戻（100円あたりの合計）を、自分の賭け金で下がった倍率で計算し直す
   if (!r.hitOdds) return r.ret;
   const refunds = r.ret - r.hitOdds.reduce((a, [o]) => a + o * 100, 0);
-  return refunds + r.hitOdds.reduce((a, [o, n]) => a + 100 * TAKE * (Q_POOL + n * st) / (TAKE * Q_POOL / o + st), 0);
+  return refunds + r.hitOdds.reduce((a, [o, n]) => a + 100 * TAKE * (pool + n * st) / (TAKE * pool / o + st), 0);
 }
 // 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1レース＝残高の1/200、100円単位）
 const SIM_FROM = '2026-11-06';
@@ -576,7 +593,7 @@ function simulate(start, key = REC_KEY, from = SIM_FROM, liveFrom = '') {
     // 1日分をまとめて: 点数ぶん買って、払戻の合計（100円あたり）
     const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
     if (st < 100) break;
-    const rr = key === QKEY ? qAdjRet(r, st) : r.ret;
+    const rr = key === QKEY ? qAdjRet(r, st) : key === KKEY ? qAdjRet(r, st, K_POOL) : r.ret;
     bank += st * (rr / 100 - r.bets); cost += st * r.bets; ret += st * rr / 100; bets += r.bets; raw += st * r.ret / 100;
     peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
     push(d, liveFrom && x.date < liveFrom ? 1 : 2);
@@ -665,7 +682,8 @@ function render() {
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
   if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', Q_SIM_FROM, Q_LIVE_FROM,
-    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
+    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + renderSim(KKEY, '拡連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', K_SIM_FROM, K_SIM_FROM,
+    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズ（幅の下限）で計算。拡連複は売上がとても少ないので、1レース10万円と厳しめに仮定して差し引いています（翌朝に前日分を記録）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
   if (!rs.length) html += `<div class="note">${state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   html += rs.map(raceRow).join('');
   list.innerHTML = html;
