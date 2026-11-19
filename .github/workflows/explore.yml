@@ -1,0 +1,47 @@
+name: 探す（普通は思いつかない買い方）
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_from:
+        description: '表を作り直すときの公平な検証の実行ID（空なら保存済みの表を使う）'
+        default: ''
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 表を作る（月ごとの予想＋確定オッズ＋払い戻し＋レースの条件）
+        if: inputs.build_from != ''
+        run: |
+          gh run download ${{ inputs.build_from }} -D fair
+          python tools/explore_build.py fair data/explore.npz
+          gh release view explore-data >/dev/null 2>&1 || gh release create explore-data --title "探索用の表" --notes "tools/explore_build.py で作った表（公平な検証の月ごとの予想・確定オッズ・払い戻し・レースの条件）"
+          gh release upload explore-data data/explore.npz --clobber
+      - name: 保存済みの表
+        if: inputs.build_from == ''
+        run: gh release download explore-data -p explore.npz -D data
+      - name: 探す
+        run: |
+          if [ -f tools/explore_search.py ]; then python tools/explore_search.py data/explore.npz explore_result.json; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: explore
+          path: explore_result.json
+          if-no-files-found: ignore
+          retention-days: 90
