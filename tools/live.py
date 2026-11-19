@@ -410,6 +410,8 @@ class Live:
                 self.store["picks"][key]["q"] = q                # 2連複（記録のみ・お金はかけない）
             if o.get("k"):
                 self.store["picks"][key]["k"] = o["k"]           # 拡連複（記録のみ・通知はしない）
+            if o.get("f"):
+                self.store["picks"][key]["f"] = o["f"]           # 3連複（記録のみ・通知はしない）
             self.dirty = True
             qbuy = q.get("state") == "buy"
             qline = ("\n［記録のみ・買わない］2連複 " + " ".join(f"{p['combo']} {p['odds']:.1f}倍" for p in q["picks"])) if qbuy else ""
@@ -464,6 +466,13 @@ class Live:
                     od["e"], od["q"] = o2.get("e"), o2.get("q")
                 except Exception as e:  # noqa: BLE001
                     log("2連単オッズの読み取り失敗", e)
+            # 3連複（記録のみ）。取れなくても続ける
+            hf = self.official("odds3f", x["jcd"], x["rno"])
+            if hf:
+                try:
+                    od["f"] = odds_parse.parse("odds3f", hf).get("f")
+                except Exception as e:  # noqa: BLE001
+                    log("3連複オッズの読み取り失敗", e)
             # 拡連複（記録のみ）。取れなくても続ける
             hk = self.official("oddsk", x["jcd"], x["rno"])
             if hk:
@@ -488,6 +497,8 @@ class Live:
                 rec["q"] = od["q"]
             if od.get("k") and sum(1 for v in od["k"] if v and v[0] is not None) >= 8:
                 rec["k"] = od["k"]   # 拡連複（記録のみ）: 決めた時のオッズ（締切1分前の取り直しでは上書きしない）
+            if od.get("f") and sum(v is not None for v in od["f"]) >= 10:
+                rec["f"] = od["f"]   # 3連複（記録のみ）: 決めた時のオッズ
             self.store["odds"][key] = rec
             self.store["updated"] = now.isoformat(timespec="seconds")
             self.dirty = True

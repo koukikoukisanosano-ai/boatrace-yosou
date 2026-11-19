@@ -20,6 +20,7 @@ const recs = fs.existsSync(researchFile) ? (JSON.parse(fs.readFileSync(researchF
 const EV_RULES = model.bet ? [{ kind: 'exacta', title: '2連単 期待値の買い目（メイン）', rule: { ...model.bet.rule, alpha: 1 } }] : [];
 const QKEY = '2連複（記録のみ）';
 const KKEY = '拡連複（記録のみ）';
+const FKEY = '3連複（記録のみ）';
 const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 
 for (const ymd of dates) {
@@ -98,6 +99,18 @@ for (const ymd of dates) {
         x.bets++;
         if (t.combo.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
         const a = pay(r.payouts.quinella_place || [], t.combo);
+        if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, n]); }
+      }
+    }
+    // 3連複（記録のみ）: 確率1番目の組で期待値1.2以上（docs/live の picks[].f）
+    if (lq && lq.f && lq.f.state) {
+      const x = s.rec[FKEY] || (s.rec[FKEY] = { bets: 0, hits: 0, ret: 0, races: 0, hitOdds: [] });
+      x.races++;
+      const n = (lq.f.picks || []).length;
+      for (const t of lq.f.picks || []) {
+        x.bets++;
+        if (t.combo.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
+        const a = pay(r.payouts.trio || [], t.combo);
         if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, n]); }
       }
     }

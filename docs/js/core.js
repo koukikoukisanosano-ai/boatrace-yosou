@@ -717,6 +717,17 @@ export function wideMap(k) {
   for (let a = 1; a <= 6; a++) for (let b = a + 1; b <= 6; b++) { const v = k[i]; out[`${a}=${b}`] = Array.isArray(v) ? v[0] : v; i++; }
   return out;
 }
+// 3連複のオッズ（20通り、1〜6 から3つの組み合わせの辞書順）→ {'1=2=3': 倍率}
+export function trioMap(f) {
+  if (!f) return null;
+  const out = {}; let i = 0;
+  for (let a = 1; a <= 6; a++) for (let b = a + 1; b <= 6; b++) for (let c = b + 1; c <= 6; c++) { out[`${a}=${b}=${c}`] = f[i]; i++; }
+  return out;
+}
+// 3連複（記録のみ）の買い方: 確率が一番高い組だけを見て、期待値1.2以上なら買う（2026年1〜10月の確定オッズで109.5%・的中率17%）
+//   byProb: 期待値の順ではなく確率の順で k 点を選ぶ。10倍以下も含める
+export const TRIO_RULE = { t: 1.2, minp: 0, maxo: 1e9, mino: 0, k: 1, edge: 0, alpha: 1, byProb: true };
+
 // 拡連複（記録のみ）の買い方: 2026年3〜10月の公平な検証で一番だった形（確定オッズで155%）
 export const WIDE_RULE = { t: 1.75, minp: 0, maxo: 40, mino: 10, k: 2, edge: 0, alpha: 1 };
 
@@ -729,7 +740,7 @@ export const QUINELLA_RULE = { t: 2.0, minp: 0, maxo: 60, mino: 10, k: 3, edge: 
 //   kind: 'trifecta'（3連単のオッズ）/ 'exacta'（2連単のオッズ）
 export function evPicks(pr, race, rule, kind) {
   if (!pr || !pr.base || !race.odds) return null;
-  const om = kind === 'exacta' ? exactaMap(race.odds.e) : kind === 'quinella' ? quinellaMap(race.odds.q) : kind === 'wide' ? wideMap(race.odds.k) : oddsMap(race.odds.t);
+  const om = kind === 'exacta' ? exactaMap(race.odds.e) : kind === 'quinella' ? quinellaMap(race.odds.q) : kind === 'wide' ? wideMap(race.odds.k) : kind === 'trio' ? trioMap(race.odds.f) : oddsMap(race.odds.t);
   if (!om) return null;
   const alpha = rule.alpha ?? 1;
   const boats = pr.boats;
@@ -738,6 +749,11 @@ export function evPicks(pr, race, rule, kind) {
   const P = {};
   perms.forEach(([a, b, c], k) => {
     const wa = boats[a].waku, wb = boats[b].waku;
+    if (kind === 'trio') {   // 3着までの3艇の組（順番は問わない）
+      const kk = [wa, wb, boats[c].waku].sort((x, y) => x - y).join('=');
+      P[kk] = (P[kk] || 0) + tri[k];
+      return;
+    }
     if (kind === 'wide') {   // 3着までに2艇とも入る: 1-2着・1-3着・2-3着の3通りに足す
       const wc = boats[c].waku;
       for (const [x, y] of [[wa, wb], [wa, wc], [wb, wc]]) { const kk = `${Math.min(x, y)}=${Math.max(x, y)}`; P[kk] = (P[kk] || 0) + tri[k]; }
@@ -754,7 +770,7 @@ export function evPicks(pr, race, rule, kind) {
   // 市場の確率（オッズの逆数を合計1に）: 予想がそれより何倍高いか（edge）
   let zi = 0; for (const k in om) if (om[k] > 0) zi += 1 / om[k];
   const all = Object.entries(P).map(([combo, p]) => { const o = om[combo]; return { combo, p, odds: o, ev: o ? p * o : 0, edge: o > 0 && zi > 0 ? p / (1 / o / zi) : 0 }; })
-    .filter((x) => x.odds > 0).sort((x, y) => y.ev - x.ev);
+    .filter((x) => x.odds > 0).sort((x, y) => (rule.byProb ? y.p - x.p : y.ev - x.ev));
   // 期待値の高い順に k 点の中から、条件に合うものだけ（research_exacta.py と同じ選び方）
   const picks = all.slice(0, rule.k || 3).filter((x) => x.ev >= rule.t && x.p >= (rule.minp || 0) && x.odds <= (rule.maxo || 1e9) && x.odds > (rule.mino || 0) && x.edge >= (rule.edge || 0)
     && (!rule.h1 || x.combo.startsWith('1-'))); // h1: 1号艇が1着の買い目だけ（tools/fair_eval.py --universe h1）
