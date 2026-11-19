@@ -22,6 +22,7 @@ const QKEY = '2連複（記録のみ）';
 const KKEY = '拡連複（記録のみ）';
 const FKEY = '3連複（記録のみ）';
 const DKEY = '2連複 予想と人気が割れた時';
+const WKEY = '単勝（記録のみ）';
 const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 
 for (const ymd of dates) {
@@ -111,6 +112,17 @@ for (const ymd of dates) {
         x.bets++;
         if (t.combo.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
         const a = pay(r.payouts.quinella || [], t.combo);
+        if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, 1]); }
+      }
+    }
+    // 単勝（記録のみ）: docs/live の picks[].w
+    if (lq && lq.w && lq.w.state) {
+      const x = s.rec[WKEY] || (s.rec[WKEY] = { bets: 0, hits: 0, ret: 0, races: 0, hitOdds: [] });
+      x.races++;
+      for (const t of lq.w.picks || []) {
+        x.bets++;
+        if (refundsN.includes(Number(t.combo))) { x.ret += 100; continue; }
+        const a = pay(r.payouts.win || [], t.combo);
         if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, 1]); }
       }
     }

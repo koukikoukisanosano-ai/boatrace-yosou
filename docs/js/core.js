@@ -734,6 +734,17 @@ export function splitPick(pr, race) {
     top: { combo: top.combo, p: +top.p.toFixed(4), odds: top.odds }, fav };
 }
 
+// 単勝のオッズ（6艇）→ {'1': 倍率}
+export function winMap(w) {
+  if (!w) return null;
+  const out = {};
+  for (let a = 1; a <= 6; a++) out[String(a)] = w[a - 1];
+  return out;
+}
+// 単勝（記録のみ）: 2026年の探索で一番強かった形（1〜6月 248%・7〜10月 230%、確定オッズ）。期待値2以上・5倍以上10倍未満
+//   単勝は売上がとても少ないので、仮想損益は1点200円で、自分の賭け金でオッズが下がる分を差し引いて計算する
+export const WIN_RULE = { t: 2.0, minp: 0, maxo: 9.99, mino: 4.99, k: 6, edge: 0, alpha: 1 };
+
 // 3連複のオッズ（20通り、1〜6 から3つの組み合わせの辞書順）→ {'1=2=3': 倍率}
 export function trioMap(f) {
   if (!f) return null;
@@ -757,7 +768,7 @@ export const QUINELLA_RULE = { t: 2.0, minp: 0, maxo: 60, mino: 10, k: 3, edge: 
 //   kind: 'trifecta'（3連単のオッズ）/ 'exacta'（2連単のオッズ）
 export function evPicks(pr, race, rule, kind) {
   if (!pr || !pr.base || !race.odds) return null;
-  const om = kind === 'exacta' ? exactaMap(race.odds.e) : kind === 'quinella' ? quinellaMap(race.odds.q) : kind === 'wide' ? wideMap(race.odds.k) : kind === 'trio' ? trioMap(race.odds.f) : oddsMap(race.odds.t);
+  const om = kind === 'exacta' ? exactaMap(race.odds.e) : kind === 'quinella' ? quinellaMap(race.odds.q) : kind === 'wide' ? wideMap(race.odds.k) : kind === 'trio' ? trioMap(race.odds.f) : kind === 'win' ? winMap(race.odds.w) : oddsMap(race.odds.t);
   if (!om) return null;
   const alpha = rule.alpha ?? 1;
   const boats = pr.boats;
@@ -766,6 +777,7 @@ export function evPicks(pr, race, rule, kind) {
   const P = {};
   perms.forEach(([a, b, c], k) => {
     const wa = boats[a].waku, wb = boats[b].waku;
+    if (kind === 'win') { const kk = String(wa); P[kk] = (P[kk] || 0) + tri[k]; return; }
     if (kind === 'trio') {   // 3着までの3艇の組（順番は問わない）
       const kk = [wa, wb, boats[c].waku].sort((x, y) => x - y).join('=');
       P[kk] = (P[kk] || 0) + tri[k];

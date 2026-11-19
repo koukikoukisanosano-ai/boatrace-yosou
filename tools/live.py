@@ -412,6 +412,8 @@ class Live:
                 self.store["picks"][key]["k"] = o["k"]           # 拡連複（記録のみ・通知はしない）
             if o.get("f"):
                 self.store["picks"][key]["f"] = o["f"]           # 3連複（記録のみ・通知はしない）
+            if o.get("w"):
+                self.store["picks"][key]["w"] = o["w"]           # 単勝（記録のみ・通知はしない）
             d = o.get("d") or {}
             if d:
                 self.store["picks"][key]["d"] = d                # 2連複「予想と人気が割れた時」（メイン）
@@ -486,6 +488,13 @@ class Live:
                     od["e"], od["q"] = o2.get("e"), o2.get("q")
                 except Exception as e:  # noqa: BLE001
                     log("2連単オッズの読み取り失敗", e)
+            # 単勝（記録のみ）。取れなくても続ける
+            hw = self.official("oddstf", x["jcd"], x["rno"])
+            if hw:
+                try:
+                    od["w"] = odds_parse.parse("oddstf", hw).get("w")
+                except Exception as e:  # noqa: BLE001
+                    log("単勝オッズの読み取り失敗", e)
             # 3連複（記録のみ）。取れなくても続ける
             hf = self.official("odds3f", x["jcd"], x["rno"])
             if hf:
@@ -519,6 +528,8 @@ class Live:
                 rec["k"] = od["k"]   # 拡連複（記録のみ）: 決めた時のオッズ（締切1分前の取り直しでは上書きしない）
             if od.get("f") and sum(v is not None for v in od["f"]) >= 10:
                 rec["f"] = od["f"]   # 3連複（記録のみ）: 決めた時のオッズ
+            if od.get("w") and sum(v is not None for v in od["w"]) >= 4:
+                rec["w"] = od["w"]   # 単勝（記録のみ）: 決めた時のオッズ
             self.store["odds"][key] = rec
             self.store["updated"] = now.isoformat(timespec="seconds")
             self.dirty = True

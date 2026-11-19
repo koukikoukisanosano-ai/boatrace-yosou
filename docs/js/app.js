@@ -1,6 +1,6 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
 // 古いファイルがスマホに残らないよう、ページと同じ版の印（?v=）を付けて読む
-const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, SPLIT_MIN_ODDS, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
+const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, WIN_RULE, SPLIT_MIN_ODDS, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -240,7 +240,8 @@ function filtered() {
   if (state.view === 'upcoming') rs = rs.filter((r) => minsLeft(r) > -KEEP_MIN);
   else rs = rs.filter((r) => minsLeft(r) <= -KEEP_MIN || (r.hasResult && minsLeft(r) <= 0)).reverse();
   // 絞った表示: 見送りのレースは隠す（「見送りも表示」で出す）
-  if (FOCUS && !state.showPass) rs = rs.filter((r) => !(r.botPick && r.botPick.d && r.botPick.d.state === 'pass') && !(r.hasResult && !(r.botPick && r.botPick.d)));
+  const wbuy = (r) => r.botPick && r.botPick.w && r.botPick.w.state === 'buy';
+  if (FOCUS && !state.showPass) rs = rs.filter((r) => wbuy(r) || (!(r.botPick && r.botPick.d && r.botPick.d.state === 'pass') && !(r.hasResult && !(r.botPick && r.botPick.d))));
   return rs;
 }
 
@@ -292,7 +293,7 @@ function raceRow(r) {
   } else {
     picks = '<span class="picks">予想できません</span>';
   }
-  if (FOCUS) picks = `<span class="picks">${splitTag(r)}</span>`, strip = '';
+  if (FOCUS) picks = `<span class="picks">${splitTag(r)}${winTag(r)}</span>`, strip = '';
   return `<article class="race${FOCUS && r.botPick && r.botPick.d && r.botPick.d.state === 'buy' ? ' is-buy' : ''}" id="r-${r.id}">
     <button type="button" class="race-head" aria-expanded="${open}" data-id="${r.id}">
       <span class="rh-time"><span class="t">${r.closedAt || '--:--'}</span><span class="r">${r.rno}R</span></span>
@@ -301,7 +302,7 @@ function raceRow(r) {
       ${strip}
       ${picks}
     </button>
-    ${open ? `<div class="race-body">${FOCUS ? splitDetail(r) : raceDetail(r, pr)}</div>` : ''}
+    ${open ? `<div class="race-body">${FOCUS ? splitDetail(r) + winDetail(r) : raceDetail(r, pr)}</div>` : ''}
   </article>`;
 }
 
@@ -469,6 +470,27 @@ function splitDetail(r) {
     <div class="ev-sum"><span>予想の1番 <b class="num">${t.combo}</b> 確率${pct(t.p, 1)}%・${t.odds ? t.odds.toFixed(1) : '-'}倍</span><span>人気の1番 <b class="num">${f.combo || '-'}</b> ${f.odds ? f.odds.toFixed(1) : '-'}倍</span></div>
     ${came}<div class="rule">予想の1番と人気の1番が違い、予想の1番が${SPLIT_MIN_ODDS}倍以上なら1点買い（締切約2〜3分前のオッズで判定）</div></div>`;
 }
+// 単勝（記録のみ）: 一覧の札と詳細
+function winResult(r) {
+  const w = r.botPick && r.botPick.w;
+  if (!w || w.state !== 'buy' || !r.hasResult) return null;
+  const paid = (r.payouts && r.payouts.win) || [];
+  const a = w.picks.map((p) => (paid.find((x) => x.combo === p.combo) || {}).amount || 0).reduce((x, y) => x + y, 0);
+  return { hit: a > 0, odds: a / 100 };
+}
+function winTag(r) {
+  const w = r.botPick && r.botPick.w;
+  if (!w || w.state !== 'buy') return '';
+  const res = winResult(r);
+  return `<span class="bet">単勝 <b class="num">${w.picks.map((p) => p.combo).join(' ')}</b> ${w.picks.map((p) => `${p.odds.toFixed(1)}倍`).join(' ')}（記録）</span>${res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? `的中 ${res.odds.toFixed(1)}倍` : '外れ'}</span>` : ''}`;
+}
+function winDetail(r) {
+  const w = r.botPick && r.botPick.w;
+  if (!w) return '';
+  const body = w.state === 'buy' ? w.picks.map((p) => `<span>単勝 <b class="num">${p.combo}</b> 確率${pct(p.p, 1)}%・${p.odds.toFixed(1)}倍・期待値${p.ev.toFixed(2)}</span>`).join('') : '<b>見送り</b>';
+  return `<div class="rec"><div class="rec-h"><b>単勝（記録のみ・1点200円）</b></div><div class="ev-sum">${body}</div><div class="rule">期待値2以上・5倍以上10倍未満</div></div>`;
+}
+
 function splitScore(rs) {
   let bets = 0, hits = 0, ret = 0, n = 0;
   for (const r of rs) {
@@ -617,7 +639,11 @@ const SHOW_EXACTA = false;
 // この買い方だけに絞った表示（2連複「予想と人気が割れた時」）。ほかの情報は隠す（判定と記録は裏で続けている）
 const FOCUS = true;
 const DKEY = '2連複 予想と人気が割れた時';
-const D_SIM_FROM = '2026-11-20';   // 2連単の買い目・損益は一旦隠す（2連複の記録に集中。2連単の判定は裏で記録を続けている）
+const D_SIM_FROM = '2026-11-20';
+// 単勝（記録のみ）: 売上がとても少ない（1レース数万円）ので、1点200円・売上4万円と仮定して自分の賭け金でオッズが下がる分を差し引く
+const WKEY = '単勝（記録のみ）';
+const W_POOL = 40000, W_STAKE = 200;
+const W_SIM_FROM = '2026-11-20';   // 2連単の買い目・損益は一旦隠す（2連複の記録に集中。2連単の判定は裏で記録を続けている）
 const Q_SIM_FROM = '2026-11-18';
 const Q_LIVE_FROM = '2026-11-18';
 // 自分の賭け金でオッズが下がる分: 2連複の売上は公開データに無いので、1レース20万円と仮定（券種別の売上の割合 0.5〜1.6% から）
@@ -639,11 +665,12 @@ function qAdjRet(r, st, pool = Q_POOL) {   // 1日分の払戻（100円あたり
 // 仮想の損益: 入金額から始めて、採用した買い方を機械的に買い続けた場合の残高（1レース＝残高の1/200、100円単位）
 const SIM_FROM = '2026-11-06';
 function simulate(start, key = REC_KEY, from = SIM_FROM, liveFrom = '') {
+  const fixed = key === WKEY ? W_STAKE : 0;
   const pts = []; let bank = start; let peak = start; let dd = 0; let bets = 0; let cost = 0; let ret = 0; let raw = 0; let last = '';
   const push = (d, seg) => { if (d !== last) { pts.push({ d, bank, seg }); last = d; } else pts[pts.length - 1].bank = bank; };
   pts.push({ d: '', bank, seg: 2 });
   const step = (n, payPer100, d, seg) => {
-    const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
+    const st = fixed || Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
     if (st < 100) return;
     for (let i = 0; i < n; i++) { bank -= st; cost += st; bets++; }
     bank += st * payPer100; ret += st * payPer100;
@@ -659,9 +686,9 @@ function simulate(start, key = REC_KEY, from = SIM_FROM, liveFrom = '') {
     const r = x.rec[key];
     if (!r.bets) continue;
     // 1日分をまとめて: 点数ぶん買って、払戻の合計（100円あたり）
-    const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
+    const st = fixed || Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
     if (st < 100) break;
-    const rr = key === QKEY || key === DKEY ? qAdjRet(r, st) : key === KKEY ? qAdjRet(r, st, K_POOL) : key === FKEY ? qAdjRet(r, st, F_POOL) : r.ret;
+    const rr = key === QKEY || key === DKEY ? qAdjRet(r, st) : key === KKEY ? qAdjRet(r, st, K_POOL) : key === FKEY ? qAdjRet(r, st, F_POOL) : key === WKEY ? qAdjRet(r, st, W_POOL) : r.ret;
     bank += st * (rr / 100 - r.bets); cost += st * r.bets; ret += st * rr / 100; bets += r.bets; raw += st * r.ret / 100;
     peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
     push(d, liveFrom && x.date < liveFrom ? 1 : 2);
@@ -750,7 +777,9 @@ function render() {
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
   if (FOCUS && state.view === 'done') html += splitScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue)) + renderSim(DKEY, '仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', D_SIM_FROM, D_SIM_FROM,
-    '<div class="k">締切約2〜3分前に実際に決めた買い目とその時のオッズで計算。2連複の売上を1レース20万円と仮定して、自分の賭け金でオッズが下がる分を差し引いています（翌朝に前日分を記録）</div>', true);
+    '<div class="k">締切約2〜3分前に実際に決めた買い目とその時のオッズで計算。2連複の売上を1レース20万円と仮定して、自分の賭け金でオッズが下がる分を差し引いています（翌朝に前日分を記録）</div>', true)
+    + renderSim(WKEY, '単勝の仮想損益（記録のみ・1点200円）', W_SIM_FROM, W_SIM_FROM,
+      '<div class="k">期待値2以上・5倍以上10倍未満の単勝（締切約2〜3分前のオッズで判定）。単勝は売上がとても少ないので1点200円、売上4万円と仮定して自分の賭け金でオッズが下がる分を差し引いています</div>', true);
   else if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', Q_SIM_FROM, Q_LIVE_FROM,
     '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + renderSim(KKEY, '拡連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', K_SIM_FROM, K_SIM_FROM,
     '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズ（幅の下限）で計算。拡連複は売上がとても少ないので、1レース10万円と厳しめに仮定して差し引いています（翌朝に前日分を記録）</div>', true) + renderSim(FKEY, '3連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', F_SIM_FROM, F_SIM_FROM,
