@@ -597,7 +597,7 @@ class Live:
                 progs.append(str(pp.relative_to(ROOT)))
             if self.push:
                 rel = str(self.path().relative_to(ROOT))
-                self.git("add", rel, *progs)
+                self.git("add", rel, *progs, *getattr(self, "lap_files", []))
                 if self.git("diff", "--cached", "--quiet").returncode != 0:
                     self.git("commit", "-q", "-m", f"直前情報 {datetime.now(JST):%H:%M}")
                     self.unpushed = True
@@ -629,6 +629,47 @@ class Live:
             self.need_deploy = False
             log("保存して公開を依頼しました")
 
+    def capture_laps(self, now: datetime, limit: int = 2):
+        """オリジナル展示データ（一周・まわり足・直線）: 締切を過ぎたレースから、各場のサイトで1レースずつ取る（data/laps）"""
+        try:
+            import fetch_laps
+        except Exception as e:  # noqa: BLE001
+            log("fetch_laps を読み込めません", e); return 0
+        ymd = self.day.replace("-", "")
+        if getattr(self, "laps_day", None) != ymd:
+            self.laps_day = ymd
+            lp = fetch_laps.OUT / f"{ymd}.json"; sp = fetch_laps.OUT / "sources.json"
+            self.laps = json.loads(lp.read_text()) if lp.exists() else {}
+            self.lap_src = json.loads(sp.read_text()) if sp.exists() else {}
+            self.lap_skip, self.lap_tried, self.laps_dirty = set(), {}, False
+        n = 0
+        for x in self.schedule:
+            if n >= limit:
+                break
+            key = f"{x['jcd']}-{x['rno']}"
+            if key in self.laps or x["jcd"] in self.lap_skip or now < x["deadline"] + timedelta(minutes=1):
+                continue
+            tries = self.lap_tried.get(key, 0)
+            if tries >= 2:
+                continue
+            self.lap_tried[key] = tries + 1
+            n += 1
+            got = fetch_laps.fetch_one(self.s, x["jcd"], x["rno"], ymd, self.lap_src, wait=1.0)
+            if got:
+                self.laps[key] = got
+                self.laps_dirty = True
+                self.stats["laps"] = self.stats.get("laps", 0) + 1
+            elif str(x["jcd"]) not in self.lap_src and tries >= 1:
+                self.lap_skip.add(x["jcd"])   # 読めるページが見つからない場は、今日はもう取りに行かない
+        if self.laps_dirty:
+            fetch_laps.OUT.mkdir(parents=True, exist_ok=True)
+            (fetch_laps.OUT / f"{ymd}.json").write_text(json.dumps(self.laps, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+            (fetch_laps.OUT / "sources.json").write_text(json.dumps(self.lap_src, ensure_ascii=False, indent=1, sort_keys=True))
+            self.laps_dirty = False
+            self.lap_files = [f"data/laps/{ymd}.json", "data/laps/sources.json"]
+            self.dirty = True
+        return n
+
     def run(self, max_minutes: float, once: bool):
         started = time.time()
         while True:
@@ -641,6 +682,9 @@ class Live:
                 self.refresh_schedule()
             # 今日の最後のレースが終わったら終了
             if self.schedule and now > self.schedule[-1]["deadline"] + timedelta(minutes=5):
+                for _ in range(80):   # 残りのオリジナル展示データを取ってから終わる
+                    if not self.capture_laps(datetime.now(JST), limit=6):
+                        break
                 log("今日のレースは終わりました")
                 break
             self.capture_final(self.final_targets(now)[:3])  # 締切1分前の2連単オッズを最優先
@@ -653,6 +697,8 @@ class Live:
             busy = self.soon(datetime.now(JST))               # もうすぐ再取得するレースがあるなら、ほかは少しずつ
             self.capture_odds(self.odds_targets(now)[:3 if busy else 6])
             self.capture_many(self.targets(now)[:3 if busy else 12])
+            if not busy:
+                self.capture_laps(datetime.now(JST))
             self.publish()
             self.deploy()
             if once:

@@ -131,6 +131,32 @@ def parse_text(html: str):
     return boats if len(boats) >= 5 else None
 
 
+def fetch_one(s, jcd: int, rno: int, ymd: str, sources: dict, wait: float = 1.5):
+    """1レース分を取る。読めたら {"cols", "boats", "url"}、どの候補でも読めなければ None。読めたページは sources に覚える"""
+    base = SITES.get(jcd)
+    if not base:
+        return None
+    known = sources.get(str(jcd), {}).get("path")
+    cands = ([known] if known else []) + [x for x in SPECIAL.get(jcd, []) + COMMON if x != known]
+    for path in cands:
+        url = base + path.format(R=rno, RR=f"{rno:02d}", D=ymd, JJ=f"{jcd:02d}")
+        try:
+            r = s.get(url, timeout=20)
+            time.sleep(wait)
+        except requests.RequestException:
+            continue
+        if r.status_code != 200:
+            continue
+        r.encoding = r.apparent_encoding if not r.encoding or r.encoding.lower() == "iso-8859-1" else r.encoding
+        boats = parse_tables(r.text) or parse_text(r.text)
+        if boats:
+            cols = sorted({k for v in boats.values() for k in v})
+            if sources.get(str(jcd), {}).get("path") != path:
+                sources[str(jcd)] = {"path": path, "cols": cols, "since": f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"}
+            return {"cols": cols, "boats": boats, "url": url, "at": datetime.now(JST).isoformat(timespec="seconds")}
+    return None
+
+
 def races_today(d: date):
     """その日に開催している場とレース（自動判定の記録 → 公開データの順に探す）"""
     ymd = d.strftime("%Y%m%d")
@@ -150,7 +176,9 @@ def races_today(d: date):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--date", default=datetime.now(JST).strftime("%Y-%m-%d"))
+    now = datetime.now(JST)
+    ap.add_argument("--date", default=(now - timedelta(days=1) if now.hour < 9 else now).strftime("%Y-%m-%d"),
+                    help="既定は今日（9時前なら前日。予約実行が遅れて日付をまたぐことがあるため）")
     ap.add_argument("--wait", type=float, default=1.5)
     ap.add_argument("--venues", default="", help="この場だけ（例 11,12）")
     a = ap.parse_args()
