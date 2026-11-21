@@ -17,5 +17,13 @@
   ],
   "path": "/asp/kyogi/{JJ}/pc/st02{RR}.htm",
   "since": "2026-11-18"
+ },
+ "4": {
+  "cols": [
+   "一周",
+   "直線"
+  ],
+  "path": "/asp/kyogi/{JJ}/sp/yoso05{RR}.htm",
+  "since": "2026-11-21"
  }
 }
