@@ -9,6 +9,15 @@
   "path": "/sp/index.php?page=yosou-cyokuzen&race={R}&day={D}",
   "since": "2026-11-18"
  },
+ "12": {
+  "cols": [
+   "まわり足",
+   "一周",
+   "展示"
+  ],
+  "path": "/asp/kyogi/12/pc/st02{RR}.htm",
+  "since": "2026-11-21"
+ },
  "15": {
   "cols": [
    "まわり足",
