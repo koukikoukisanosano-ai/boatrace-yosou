@@ -92,7 +92,20 @@ main { padding: 6px 16px 0; max-width: 720px; margin: 0 auto; }
 
 /* レース一覧 */
 .race { border-bottom: 1px solid var(--line); }
-.race.is-buy { box-shadow: inset 4px 0 0 var(--ok); }
+.fboats { display: grid; gap: 8px; margin: 6px 0 10px; }
+.fboat { display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: start; }
+.fboat .fn { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+.fboat .fn small { font-weight: 500; color: var(--muted); font-size: 11px; }
+.fbar { display: grid; grid-template-columns: 38px 1fr 44px; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+.fbar .track { height: 10px; border-radius: 5px; background: var(--line, #e3e6ea); overflow: hidden; }
+.fbar .track i { display: block; height: 100%; border-radius: 5px; }
+.fbar b { text-align: right; font-variant-numeric: tabular-nums; color: var(--text, inherit); }
+.fbar.main b { font-size: 14px; }
+.fbar.sub .track { height: 6px; }
+.fbar.sub b { font-weight: 500; color: var(--muted); }
+.tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 600; background: var(--line, #e3e6ea); color: var(--muted); vertical-align: middle; }
+.tag.buy { background: var(--ok); color: #fff; }
+.race.is-buy { box-shadow: inset 4px 0 0 var(--ok); padding-left: 10px; }
 .race-head {
   display: grid; grid-template-columns: 62px 1fr auto; grid-template-areas: "time name left" "time strip strip" "time picks picks";
   column-gap: 12px; row-gap: 5px; width: 100%; text-align: left; background: none; border: 0; padding: 12px 0; cursor: pointer;
