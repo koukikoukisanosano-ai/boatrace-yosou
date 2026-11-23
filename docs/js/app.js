@@ -1,6 +1,6 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
 // 古いファイルがスマホに残らないよう、ページと同じ版の印（?v=）を付けて読む
-const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, WIN_RULE, SPLIT_MIN_ODDS, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
+const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, oddsMap, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, WIN_RULE, SPLIT_MIN_ODDS, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -13,6 +13,7 @@ const state = {
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
   error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null, fair: null, drift: null,
   mode: 'roi',
+  site: loadPref('site', 'split') === 'tri' ? 'tri' : 'split', forms: {}, formsDate: '',
   bank: +loadPref('bank2', '500000') || 500000,
 };
 function loadPref(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
@@ -241,7 +242,7 @@ function filtered() {
   else rs = rs.filter((r) => minsLeft(r) <= -KEEP_MIN || (r.hasResult && minsLeft(r) <= 0)).reverse();
   // 絞った表示: 見送りのレースは隠す（「見送りも表示」で出す）
   const wbuy = (r) => r.botPick && r.botPick.w && r.botPick.w.state === 'buy';
-  if (FOCUS && !state.showPass) rs = rs.filter((r) => (!(r.botPick && r.botPick.d && r.botPick.d.state === 'pass') && !(r.hasResult && !(r.botPick && r.botPick.d))));
+  if (SPLIT() && !state.showPass) rs = rs.filter((r) => (!(r.botPick && r.botPick.d && r.botPick.d.state === 'pass') && !(r.hasResult && !(r.botPick && r.botPick.d))));
   return rs;
 }
 
@@ -293,8 +294,9 @@ function raceRow(r) {
   } else {
     picks = '<span class="picks">予想できません</span>';
   }
-  if (FOCUS) picks = `<span class="picks">${splitTag(r)}</span>`;
-  return `<article class="race${FOCUS && r.botPick && r.botPick.d && r.botPick.d.state === 'buy' ? ' is-buy' : ''}" id="r-${r.id}">
+  if (SPLIT()) picks = `<span class="picks">${splitTag(r)}</span>`;
+  else picks = `<span class="picks">${triTag(r, pr)}</span>`;
+  return `<article class="race${(SPLIT() ? r.botPick && r.botPick.d && r.botPick.d.state === 'buy' : getForm(r.id).f.some((x) => x.length)) ? ' is-buy' : ''}" id="r-${r.id}">
     <button type="button" class="race-head" aria-expanded="${open}" data-id="${r.id}">
       <span class="rh-time"><span class="t">${r.closedAt || '--:--'}</span><span class="r">${r.rno}R</span></span>
       <span class="rh-name"><span class="v">${esc(r.venue)}</span><span class="sub">${esc(r.subtitle || '')}</span></span>
@@ -302,7 +304,7 @@ function raceRow(r) {
       ${strip}
       ${picks}
     </button>
-    ${open ? `<div class="race-body">${FOCUS ? splitDetail(r, pr) : raceDetail(r, pr)}</div>` : ''}
+    ${open ? `<div class="race-body">${SPLIT() ? splitDetail(r, pr) : triDetail(r, pr)}</div>` : ''}
   </article>`;
 }
 
@@ -537,6 +539,172 @@ function splitScore(rs) {
   </div></section>`;
 }
 
+// ------------------------------------------------------------------ 3連単: フォーメーションを自分で選んで、的中率を見る
+// 選んだフォーメーションは日付ごとにこの端末に保存（{f: [[1着の艇],[2着],[3着]], at: 最後に変えた時刻}）
+function forms() {
+  if (state.formsDate !== state.date) {
+    try { state.forms = JSON.parse(localStorage.getItem(`forms-${state.date}`) || '{}'); } catch (e) { state.forms = {}; }
+    state.formsDate = state.date;
+  }
+  return state.forms;
+}
+function getForm(id) { const x = forms()[id]; return x && Array.isArray(x.f) && x.f.length === 3 ? x : { f: [[], [], []], at: 0 }; }
+function setForm(id, f, r) {
+  const all = forms();
+  const sorted = f.map((s) => [...new Set(s)].sort((a, b) => a - b));
+  if (sorted.every((s) => !s.length)) delete all[id];
+  else all[id] = { f: sorted, at: Date.now(), late: !!(r && (r.hasResult || minsLeft(r) <= 0)) };
+  try { localStorage.setItem(`forms-${state.date}`, JSON.stringify(all)); } catch (e) { /* 保存できなくても表示はできる */ }
+}
+// フォーメーションに含まれる3連単（同じ艇が重なる組み合わせは除く）
+function formCombos(f) {
+  const out = [];
+  for (const a of f[0]) for (const b of f[1]) if (b !== a) for (const c of f[2]) if (c !== a && c !== b) out.push(`${a}-${b}-${c}`);
+  return out;
+}
+const formText = (f) => f.map((s) => s.join('')).join('-');
+const triMemo = new WeakMap();
+function triProb(pr) {   // {'1-2-3': 確率}
+  if (!triMemo.has(pr)) triMemo.set(pr, { map: Object.fromEntries(pr.trifecta.map((t) => [t.combo, t.p])) });
+  return triMemo.get(pr);
+}
+function formStats(r, pr, f) {
+  const combos = formCombos(f);
+  const pm = triProb(pr).map;
+  const om = r.odds && r.odds.t ? oddsMap(r.odds.t) : null;
+  let p = 0, er = 0, inv = 0, k = 0, gami = 0, lo = Infinity, hi = 0;
+  for (const c of combos) {
+    const q = pm[c] || 0; p += q;
+    const o = om && om[c];
+    if (o > 0) { er += q * o; inv += 1 / o; k++; lo = Math.min(lo, o); hi = Math.max(hi, o); if (o < combos.length) gami++; }
+  }
+  const odds = om && k && k === combos.length ? { ret: er / combos.length, syn: 1 / inv, lo, hi, gami } : null;
+  return { combos, n: combos.length, p, odds };
+}
+// おまかせ: 点数が max 点以内で、的中率（予想の確率の合計）がいちばん高いフォーメーションを全部試して探す
+const AUTO_N = [1, 3, 6, 10, 16, 24];
+function autoForms(pr) {
+  const memo = triProb(pr);
+  if (memo.auto) return memo.auto;
+  const W = pr.boats.map((b) => b.waku); const n = W.length;
+  const at = new Map(W.map((w, i) => [w, i]));
+  const T = new Float64Array(n * n * n);
+  for (const t of pr.trifecta) { const [a, b, c] = t.combo.split('-').map((x) => at.get(+x)); T[(a * n + b) * n + c] = t.p; }
+  const M = 1 << n;
+  const best = AUTO_N.map(() => null);
+  const sc = new Float64Array(n), cc = new Int32Array(n);
+  const S3 = new Float64Array(M), K3 = new Int32Array(M);
+  const low = new Int32Array(M); for (let m = 1; m < M; m++) low[m] = 31 - Math.clz32(m & -m);
+  for (let m1 = 1; m1 < M; m1++) for (let m2 = 1; m2 < M; m2++) {
+    sc.fill(0); cc.fill(0);
+    for (let a = 0; a < n; a++) if (m1 >> a & 1) for (let b = 0; b < n; b++) if (b !== a && (m2 >> b & 1)) for (let c = 0; c < n; c++) if (c !== a && c !== b) { sc[c] += T[(a * n + b) * n + c]; cc[c]++; }
+    for (let m3 = 1; m3 < M; m3++) {   // 3着の組の合計は、1艇少ない組の合計に1艇足して作る
+      const c = low[m3], rest = m3 & (m3 - 1);
+      const s = (S3[m3] = S3[rest] + sc[c]), k = (K3[m3] = K3[rest] + cc[c]);
+      if (!k) continue;
+      for (let j = 0; j < AUTO_N.length; j++) {
+        if (k > AUTO_N[j]) continue;
+        const B = best[j];
+        if (!B || s > B.p + 1e-9 || (Math.abs(s - B.p) <= 1e-9 && k < B.n)) best[j] = { p: s, n: k, m: [m1, m2, m3] };
+      }
+    }
+  }
+  const toF = (m) => m.map((x) => W.filter((_, i) => x >> i & 1));
+  memo.auto = best.map((B, j) => (B ? { max: AUTO_N[j], p: B.p, n: B.n, f: toF(B.m) } : null)).filter(Boolean);
+  return memo.auto;
+}
+function triResult(r) { const t = ((r.payouts && r.payouts.trifecta) || [])[0]; return r.hasResult && t ? { combo: t.combo, odds: t.amount / 100 } : null; }
+function triTag(r, pr) {
+  if (!pr) return '予想できません';
+  const res = triResult(r);
+  const F = getForm(r.id);
+  const pv = r.preview === 'none' ? '<span class="pv none">展示前</span>' : '';
+  if (F.f.some((x) => x.length)) {
+    const st = formStats(r, pr, F.f);
+    const hit = res && st.combos.includes(res.combo);
+    const per = perPoint(Math.max(st.n, 1));
+    const mark = res ? `<span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? `的中 ${res.odds.toFixed(1)}倍 ${res.odds * per - per * st.n >= 0 ? '+' : ''}${yen(res.odds * per - per * st.n)}` : `外れ（${res.combo}）`}</span>` : '';
+    return `<span class="bet buy">3連単 <b class="num">${formText(F.f)}</b> ${st.n}点 的中率${pct(st.p)}%</span>${mark}${pv}`;
+  }
+  const t = pr.trifecta[0];
+  const b6 = autoForms(pr).find((x) => x.max === 6);
+  const mark = res ? `<span class="hitmark ${res.combo === t.combo ? 'yes' : 'no'}">結果 ${res.combo} ${res.odds.toFixed(1)}倍</span>` : '';
+  return `<span>本命 <b class="num">${t.combo}</b> ${pct(t.p, 1)}%</span>${b6 ? `<span>6点なら ${pct(b6.p)}%</span>` : ''}${mark}${pv}`;
+}
+function triDetail(r, pr) {
+  if (!pr) return '<div class="note">このレースは予想できません。</div>';
+  const res = triResult(r);
+  const F = getForm(r.id); const f = F.f;
+  const idx = new Map(pr.boats.map((b, i) => [b.waku, i]));
+  // 来やすい艇: 1着・2着内・3着内
+  const boats = r.boats.map((b) => {
+    const i = idx.get(b.waku);
+    if (i === undefined) return `<div class="fboat absent">${chip(b.waku)}<div class="fn">${esc(b.name)} <small>欠場</small></div></div>`;
+    const fb = (label, p, cls) => `<div class="fbar ${cls}"><span>${label}</span><span class="track"><i class="w${b.waku}" style="width:${(p * 100).toFixed(1)}%"></i></span><b>${pct(p)}%</b></div>`;
+    return `<div class="fboat">${chip(b.waku)}<div><div class="fn">${esc(b.name)} <small>${RANK_LABEL[b.rank] || ''}</small></div>${fb('1着', pr.probs.win[i], 'main')}${fb('2着内', pr.probs.top2[i], 'main')}${fb('3着内', pr.probs.top3[i], 'main')}</div></div>`;
+  }).join('');
+  // フォーメーション: 着ごとの確率（ちょうどその着になる確率）の表。押して選ぶ
+  const exact = (i, pos) => (pos === 0 ? pr.probs.win[i] : pos === 1 ? pr.probs.top2[i] - pr.probs.win[i] : pr.probs.top3[i] - pr.probs.top2[i]);
+  const place = res ? Object.fromEntries(r.boats.filter((b) => b.place).map((b) => [b.waku, b.place])) : {};
+  const grid = pr.boats.map((b, i) => `<div class="fg-b">${chip(b.waku)}</div>${[0, 1, 2].map((pos) => {
+    const p = exact(i, pos), on = f[pos].includes(b.waku);
+    return `<button type="button" class="fg-c${on ? ' on' : ''}${place[b.waku] === pos + 1 ? ' came' : ''}" data-fcell="${pos},${b.waku}" aria-pressed="${on}" style="--a:${Math.min(1, p / 0.6).toFixed(2)}"><span>${pct(p)}%</span></button>`;
+  }).join('')}`).join('');
+  const st = formStats(r, pr, f);
+  const per = perPoint(Math.max(st.n, 1));
+  const hit = res && st.combos.includes(res.combo);
+  let sum = '<div class="fs-empty">表のマスを押して、1着・2着・3着に入れる艇を選んでください。下の「おまかせ」でも選べます。</div>';
+  if (f.some((x) => x.length)) {
+    const O = st.odds;
+    sum = `<div class="fs-main"><span class="fs-f num">${formText(f.map((x) => (x.length ? x : ['?'])))}</span><span><b class="num">${st.n}</b>点</span><span>的中率 <b class="num big">${pct(st.p, 1)}</b>%</span></div>
+      ${st.n ? `<div class="fs-sub"><span>1点${yen(per)}・計${yen(per * st.n)}</span>${O ? `<span>合成オッズ <b class="num">${O.syn.toFixed(1)}</b>倍</span><span>当たれば <b class="num">${O.lo.toFixed(1)}〜${O.hi.toFixed(1)}</b>倍</span><span>回収率の目安 <b class="num ${O.ret >= 1 ? 'good' : ''}">${pct(O.ret)}</b>%</span>${O.gami ? `<span class="warn">${O.gami}点はトリガミ</span>` : ''}` : '<span>オッズは締切約2〜3分前から</span>'}</div>` : '<div class="fs-sub">まだ1点もできていません（同じ艇は2つの着に入れません）</div>'}
+      ${res ? `<div class="fs-sub"><span class="hitmark ${hit ? 'yes' : 'no'}">${hit ? `的中 ${res.odds.toFixed(1)}倍` : '外れ'}</span>${F.late ? '<span>締切後に選んだので成績には数えません</span>' : ''}</div>` : ''}`;
+  }
+  const auto = autoForms(pr).map((a) => `<button type="button" class="fp${formText(a.f) === formText(f) ? ' on' : ''}" data-fpreset="${a.max}"><b class="num">${a.n}点</b> ${pct(a.p)}%<small>${formText(a.f)}</small></button>`).join('');
+  // 3連単の上位: 確率・オッズ・期待値
+  const om = r.odds && r.odds.t ? oddsMap(r.odds.t) : null;
+  const inForm = new Set(st.combos);
+  const rows = pr.trifecta.slice(0, 15).map((t) => {
+    const o = om && om[t.combo]; const ev = o ? o * t.p : null; const h = res && res.combo === t.combo;
+    return `<div class="${h ? 'hit' : ''}">${comboHtml(t.combo)}${inForm.has(t.combo) ? '<span class="tag buy">選択中</span>' : ''}</div><div class="p ${h ? 'hit' : ''}">${pct(t.p, 1)}%</div>
+      <div class="o ${h ? 'hit' : ''}">${o ? `<b>${o.toFixed(1)}</b>倍 期待値<b class="${ev >= 1 ? 'good' : ''}">${ev.toFixed(2)}</b>` : `目安 <b>${(1 / t.p).toFixed(1)}</b>倍`}</div>`;
+  }).join('');
+  const cum = pr.trifecta.slice(0, 15).reduce((a, t) => a + t.p, 0);
+  const came = res ? `<div class="note">結果 3連単 <b class="num">${res.combo}</b> ${res.odds.toFixed(1)}倍（予想では${(pr.trifecta.findIndex((t) => t.combo === res.combo) + 1) || '-'}番目・${pct(triProb(pr).map[res.combo] || 0, 1)}%）</div>` : '';
+  return `${came}
+    <h3>来やすい艇<small>1着・2着以内・3着以内に入る確率</small></h3><div class="fboats">${boats}</div>
+    <h3>フォーメーション<small>マスは「ちょうどその着になる確率」。押して選ぶ</small></h3>
+    <div class="fgrid"><div></div><div class="fg-h">1着</div><div class="fg-h">2着</div><div class="fg-h">3着</div>${grid}</div>
+    <div class="fsum">${sum}</div>
+    <div class="fpre"><span class="k">おまかせ（その点数以内で的中率がいちばん高い形）</span><div class="fps">${auto}<button type="button" class="fp" data-fpreset="clear">クリア</button></div></div>
+    <h3>3連単の予想<small>${om ? `オッズ ${r.odds.at ? hhmm(r.odds.at) : ''}時点` : 'オッズ取得前（目安＝つり合いの倍率）'}・上位15点で${pct(cum)}%</small></h3><div class="bets">${rows}</div>`;
+}
+// 答え合わせ: 締切前に選んだフォーメーションだけで
+function triScore(rs) {
+  let n = 0, pts = 0, hits = 0, cost = 0, ret = 0, expHits = 0, late = 0, top1 = 0, all = 0;
+  for (const r of rs) {
+    const pr = state.preds.get(r.id); const res = triResult(r);
+    if (!pr || !res) continue;
+    all++; if (pr.trifecta[0].combo === res.combo) top1++;
+    const F = getForm(r.id);
+    if (!F.f.some((x) => x.length)) continue;
+    if (F.late) { late++; continue; }
+    const st = formStats(r, pr, F.f);
+    if (!st.n) continue;
+    const per = perPoint(st.n);
+    n++; pts += st.n; cost += per * st.n; expHits += st.p;
+    if (st.combos.includes(res.combo)) { hits++; ret += res.odds * per; }
+  }
+  if (!all) return '';
+  const body = n ? `<div class="grid">
+      <div><div class="k">買ったレース</div><div class="v">${n}<small>R ${pts}点</small></div></div>
+      <div><div class="k">的中（表示の的中率から見込み${expHits.toFixed(1)}本）</div><div class="v">${hits}<small>本</small></div><div class="k">${pct(hits / n)}%</div></div>
+      <div><div class="k">回収率</div><div class="v">${pct(ret / cost)}<small>%</small></div><div class="k">${ret - cost >= 0 ? '+' : ''}${yen(ret - cost)}</div></div></div>`
+    : '<div class="k">締切前にフォーメーションを選んだレースはまだありません。</div>';
+  return `<section class="score"><h2>今日の3連単（自分で選んだフォーメーション）</h2>${body}
+    <div class="k" style="margin-top:6px">予想の本命（確率1番の1点）は ${all}レース中 ${top1}本的中${late ? `。締切後に選んだ${late}レースは数えていません` : ''}</div></section>`;
+}
+
 // 一覧の札: 2連複の買い目（自動で決めたもの）と当たり外れ
 function quinellaTag(r) {
   const q = r.botPick && r.botPick.q;
@@ -666,7 +834,7 @@ function renderRecord() {
 const QKEY = '2連複（記録のみ）';
 const SHOW_EXACTA = false;
 // この買い方だけに絞った表示（2連複「予想と人気が割れた時」）。ほかの情報は隠す（判定と記録は裏で続けている）
-const FOCUS = true;
+const SPLIT = () => state.site === 'split';   // 2連複の割れ狙い（通知もこれ）/ 3連単（フォーメーションを自分で選ぶ）
 const DKEY = '2連複 予想と人気が割れた時';
 const D_SIM_FROM = '2026-11-20';
 // 単勝（記録のみ）: 売上がとても少ない（1レース数万円）ので、1点200円・売上4万円と仮定して自分の賭け金でオッズが下がる分を差し引く
@@ -798,6 +966,7 @@ function render() {
   $('#venues').innerHTML = state.view === 'research' ? '' : [[0, 'すべて'], ...venues].map(([j, v]) => `<button type="button" data-venue="${j}" aria-pressed="${state.venue === j}">${esc(v)}</button>`).join('');
   document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === state.view)));
   document.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === state.mode)));
+  document.querySelectorAll('[data-site]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.site === state.site)));
   $('#bankRow').hidden = state.view === 'research';
   const list = $('#list');
   if (state.view === 'research') { list.innerHTML = renderResearch(); renderFooter(); return; }
@@ -805,14 +974,15 @@ function render() {
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
-  if (FOCUS && state.view === 'done') html += splitScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue)) + renderSim(DKEY, '仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', D_SIM_FROM, D_SIM_FROM,
+  if (SPLIT() && state.view === 'done') html += splitScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue)) + renderSim(DKEY, '仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', D_SIM_FROM, D_SIM_FROM,
     '<div class="k">締切約2〜3分前に実際に決めた買い目とその時のオッズで計算。2連複の売上を1レース20万円と仮定して、自分の賭け金でオッズが下がる分を差し引いています（翌朝に前日分を記録）</div>', true);
+  else if (state.view === 'done' && !SPLIT()) html += triScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue));
   else if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', Q_SIM_FROM, Q_LIVE_FROM,
     '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + renderSim(KKEY, '拡連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', K_SIM_FROM, K_SIM_FROM,
     '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズ（幅の下限）で計算。拡連複は売上がとても少ないので、1レース10万円と厳しめに仮定して差し引いています（翌朝に前日分を記録）</div>', true) + renderSim(FKEY, '3連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', F_SIM_FROM, F_SIM_FROM,
     '<div class="k">確率が一番高い3連複で期待値1.2以上のときだけ。締切約2〜3分前に実際に決めた買い目とその時のオッズで計算し、3連複の売上を1レース50万円と仮定して差し引いています（翌朝に前日分を記録）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
-  if (!rs.length) html += `<div class="note">${FOCUS && !state.showPass ? (state.view === 'upcoming' ? 'これから締切の買いのレースはありません（判定は締切約2〜3分前）。' : '買いになったレースはまだありません。') : state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
-  if (FOCUS) {
+  if (!rs.length) html += `<div class="note">${SPLIT() && !state.showPass ? (state.view === 'upcoming' ? 'これから締切の買いのレースはありません（判定は締切約2〜3分前）。' : '買いになったレースはまだありません。') : state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
+  if (SPLIT()) {
     const nPass = state.races.filter((r) => (state.venue === 0 || r.jcd === state.venue) && r.botPick && r.botPick.d && r.botPick.d.state === 'pass').length;
     html += `<div class="note"><button type="button" class="linkish" id="togglePass">${state.showPass ? '見送りのレースを隠す' : `見送りのレースも表示（今日${nPass}レース）`}</button></div>`;
   }
@@ -825,8 +995,15 @@ function renderFooter() {
   const m = state.model;
   if (!m) return;
   const lines = [];
-  if (FOCUS) {
+  if (SPLIT()) {
     lines.push(`買い方: 予想の確率1番の2連複が、オッズの1番人気と違い、${SPLIT_MIN_ODDS}倍以上ついていたら1点買う（締切約2〜3分前に判定・通知）。2026年1〜10月の公平な検証（確定オッズ）で5〜10倍は回収率109%・的中率18%。実際に決める時点のオッズでは下がる見込みのため、今は記録で確かめている段階です。`);
+    lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。`);
+    $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
+    return;
+  }
+  if (state.site === 'tri') {
+    lines.push('3連単: 各艇の1着・2着・3着の確率と、選んだフォーメーションの的中率（＝含まれる3連単の予想の確率の合計）を出しています。11/5〜22の2,570レースで確かめると、予想の確率は実際とよく合っていて、的中率の表示はわずかに控えめでした（例: 上位6点 表示38%→実際42%、上位20点 70%→72%）。');
+    lines.push('オッズと期待値は締切約2〜3分前に取ったもの。締切までにオッズは下がりがちなので、期待値は甘めに見てください。通知は2連複の割れ狙いだけです。成績は締切前に選んだフォーメーションだけで数えます（この端末に保存）。');
     lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。`);
     $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
     return;
@@ -840,6 +1017,24 @@ function renderFooter() {
 
 // ------------------------------------------------------------------ 操作
 document.addEventListener('click', (e) => {
+  const sb = e.target.closest('[data-site]');
+  if (sb) { state.site = sb.dataset.site; savePref('site', state.site); render(); window.scrollTo({ top: 0 }); return; }
+  const fc = e.target.closest('[data-fcell], [data-fpreset]');
+  if (fc) {
+    const id = fc.closest('.race').id.slice(2);
+    const r = state.races.find((x) => x.id === id); const pr = state.preds.get(id);
+    if (!r || !pr) return;
+    let f = getForm(id).f.map((x) => x.slice());
+    if (fc.dataset.fcell) {
+      const [pos, w] = fc.dataset.fcell.split(',').map(Number);
+      f[pos] = f[pos].includes(w) ? f[pos].filter((x) => x !== w) : [...f[pos], w];
+    } else if (fc.dataset.fpreset === 'clear') f = [[], [], []];
+    else { const b = autoForms(pr).find((x) => x.max === +fc.dataset.fpreset); if (b) f = b.f.map((x) => x.slice()); }
+    setForm(id, f, r);
+    const art = document.getElementById(`r-${id}`);
+    if (art) art.outerHTML = raceRow(r);
+    return;
+  }
   const head = e.target.closest('.race-head');
   if (head) {
     const id = head.dataset.id;
@@ -850,7 +1045,7 @@ document.addEventListener('click', (e) => {
     return;
   }
   const body = e.target.closest('.race-body');
-  if (body && !e.target.closest('a, button, input')) {
+  if (body && !e.target.closest('a, button, input, .fgrid, .fsum, .fpre')) {
     const art = body.closest('.race');
     const id = art.id.slice(2);
     state.open.delete(id);

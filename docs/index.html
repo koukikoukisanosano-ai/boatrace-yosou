@@ -253,6 +253,29 @@ table.ev td.good { color: var(--ok); font-weight: 700; }
 .ev-sum .good { color: var(--ok); }
 .big-bet { font-size: 22px; letter-spacing: 0.04em; }
 div.rec .rule { font-size: 11px; color: var(--faint); margin-top: 2px; }
+.sitesw { display: flex; margin-top: 8px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; background: var(--surface); }
+.sitesw button { flex: 1; height: 30px; border: 0; background: none; font-size: 13px; font-weight: 600; color: var(--muted); }
+.sitesw button[aria-pressed="true"] { background: var(--water); color: #fff; }
+.fgrid { display: grid; grid-template-columns: 30px repeat(3, 1fr); gap: 5px; align-items: center; margin: 4px 0 8px; }
+.fg-h { text-align: center; font-size: 12px; font-weight: 700; color: var(--muted); }
+.fg-b { display: flex; justify-content: center; }
+.fg-c { position: relative; height: 40px; border-radius: 8px; border: 1.5px solid var(--line); background: color-mix(in srgb, var(--water) calc(var(--a) * 55%), var(--surface)); font-family: var(--num); font-weight: 700; font-size: 15px; color: var(--ink); cursor: pointer; }
+.fg-c span { position: relative; }
+.fg-c.on { border-color: var(--ok); box-shadow: inset 0 0 0 2px var(--ok); }
+.fg-c.on::after { content: '✓'; position: absolute; top: 1px; right: 5px; font-size: 11px; color: var(--ok); }
+.fg-c.came::before { content: '着'; position: absolute; left: 5px; top: 1px; font-size: 10px; color: var(--warn); font-family: var(--text); }
+.fsum { border: 1.5px solid var(--water); border-radius: 9px; padding: 8px 10px; background: var(--surface); }
+.fs-empty { font-size: 13px; color: var(--muted); }
+.fs-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; font-size: 13px; }
+.fs-main .fs-f { font-size: 20px; font-weight: 700; letter-spacing: 0.04em; }
+.fs-main b.big { font-size: 24px; }
+.fs-sub { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+.fs-sub b { color: var(--ink); } .fs-sub b.good { color: var(--ok); } .fs-sub .warn { color: var(--warn); font-weight: 700; }
+.fpre { margin-top: 8px; } .fpre .k { font-size: 11.5px; color: var(--muted); }
+.fps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.fp { display: flex; flex-direction: column; align-items: flex-start; padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); font-size: 12.5px; line-height: 1.3; cursor: pointer; }
+.fp small { font-family: var(--num); color: var(--muted); font-size: 11px; }
+.fp.on { border-color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 @media (min-width: 560px) { .boat { grid-template-columns: 34px 1fr 120px; } }
@@ -261,7 +284,7 @@ div.rec .rule { font-size: 11px; color: var(--faint); margin-top: 2px; }
 <body>
 <header class="top">
   <div class="top-row">
-    <h1>競艇予想 <small>2連複・割れ狙い</small></h1>
+    <h1>競艇予想</h1>
     <div class="datenav">
       <button type="button" id="prev" aria-label="前の日">‹</button>
       <span class="d" id="dateLabel">--/--</span>
@@ -270,6 +293,10 @@ div.rec .rule { font-size: 11px; color: var(--faint); margin-top: 2px; }
     </div>
   </div>
   <div class="status" id="status"><span><span class="spin"></span> 読み込み中</span></div>
+  <div class="sitesw" role="group" aria-label="買い方">
+    <button type="button" data-site="split" aria-pressed="true">2連複 割れ狙い</button>
+    <button type="button" data-site="tri" aria-pressed="false">3連単 フォーメーション</button>
+  </div>
   <div class="tabs" role="group" aria-label="表示">
     <button type="button" data-view="upcoming" aria-pressed="true">締切前</button>
     <button type="button" data-view="done" aria-pressed="false">答え合わせ</button>
