@@ -700,7 +700,12 @@ class Live:
         until = time.time() + wait_minutes * 60
         while True:   # 公開データに結果が出るのを待つ（約10分おきの更新）
             res = self.day_results()
-            pending = [k for k in split if k not in res]
+            # 締切から90分たっても結果が無いレースは中止（荒天の打ち切りなど。舟券は返還）とみなして待たない
+            now = datetime.now(JST)
+            def recent(k):
+                hm = (self.store.get("deadlines") or {}).get(k)
+                return bool(hm) and datetime.fromisoformat(f"{self.day} {hm}:00").replace(tzinfo=JST) > now - timedelta(minutes=90)
+            pending = [k for k in split if k not in res and recent(k)]
             if not pending or time.time() > until:
                 break
             log(f"まとめの通知: 結果待ち {len(pending)} レース")
@@ -712,7 +717,7 @@ class Live:
             for k in sorted(keys, key=lambda k: dls.get(k, "99:99")):
                 d = split[k]; c = d["top"]["combo"]
                 if k not in res:
-                    lines.append(f"{dls.get(k, '')} {VENUE.get(int(k.split('-')[0]), k)}{k.split('-')[1]}R {c} 結果待ち"); continue
+                    lines.append(f"{dls.get(k, '')} {VENUE.get(int(k.split('-')[0]), k)}{k.split('-')[1]}R {c} 結果なし（中止とみなして数えない）"); continue
                 pay, refunds = res[k]
                 n += 1
                 if any(int(b) in refunds for b in c.split("=")):
