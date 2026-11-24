@@ -4,5 +4,8 @@
  "page": "https://koukikoukisanosano-ai.github.io/boatrace-yosou/",
  "lead_min": 2,
  "exacta": false,
- "mode": "split"
+ "mode": "split",
+ "per_race": false,
+ "summary": true,
+ "min_p": 0.2
 }

@@ -1080,7 +1080,7 @@ let notifyCfg = null;
 async function renderNotify() {
   if (!notifyCfg) { try { notifyCfg = (await getJSON('notify.json', 'no-cache')).json; } catch (e) { return; } }
   const el = $('#notifyPanel');
-  el.innerHTML = `<p>締切の約2〜3分前に買い目が決まると、スマホに通知します（ページを開いていなくても届きます）。</p>
+  el.innerHTML = `<p>${notifyCfg.per_race === false ? `今は仮想で記録中なので、レースごとの通知は止めています。毎晩その日の最後のレースが終わって結果が出たら、2連複の割れ狙い（確率${Math.round((notifyCfg.min_p || 0.2) * 100)}%以上）を買っていたらどうだったかを1回だけ通知します。` : '締切の約2〜3分前に買い目が決まると、スマホに通知します（ページを開いていなくても届きます）。'}</p>
     <ol><li>App Store で「ntfy」アプリを入れる（無料）</li>
     <li>アプリの「＋」で、トピック名に <b class="num">${esc(notifyCfg.topic)}</b> を入れて登録</li></ol>
     <p><a href="https://ntfy.sh/${encodeURIComponent(notifyCfg.topic)}" target="_blank" rel="noopener">ブラウザで通知の一覧を見る</a>　通知の金額は入金${Math.round(notifyCfg.bank / 10000)}万円で計算しています。</p>`;

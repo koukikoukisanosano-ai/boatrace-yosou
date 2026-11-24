@@ -48,6 +48,7 @@ except ImportError:  # pragma: no cover
     pass
 
 JST = timezone(timedelta(hours=9))
+VENUE = dict(enumerate("桐生 戸田 江戸川 平和島 多摩川 浜名湖 蒲郡 常滑 津 三国 びわこ 住之江 尼崎 鳴門 丸亀 児島 宮島 徳山 下関 若松 芦屋 福岡 唐津 大村".split(), 1))
 ROOT = Path(__file__).resolve().parent.parent
 PROG_DIR = ROOT / "docs" / "data" / "programs"   # その日の出走表の控え（公開データで抜けたときに戻す。サイトも使う）
 LIVE_DIR = ROOT / "docs" / "live"
@@ -419,8 +420,8 @@ class Live:
                 self.store["picks"][key]["d"] = d                # 2連複「予想と人気が割れた時」（メイン）
             if NOTIFY.get("mode") == "split":   # 通知はこの買い方だけ（docs/notify.json の mode: split）
                 self.dirty = True
-                if d.get("state") != "buy" or not NOTIFY.get("topic"):
-                    continue
+                if d.get("state") != "buy" or not NOTIFY.get("topic") or not NOTIFY.get("per_race", True):
+                    continue   # per_race: false → レースごとの通知はしない（1日の最後のまとめだけ: day_summary）
                 t, fav = d["picks"][0], d.get("fav") or {}
                 dl = self.deadline_of(key)
                 left = f"\n締切まで約{max(1, int((dl - now).total_seconds() // 60))}分" if dl else ""
@@ -670,6 +671,80 @@ class Live:
             self.dirty = True
         return n
 
+    def day_results(self) -> dict:
+        """公開データ（Open API）から今日の結果: {"jcd-rno": (2連複の払戻 {組: 金額}, 返還の艇)}。結果が出たレースだけ"""
+        try:
+            r = self.s.get(f"{OPENAPI}/{self.day[:4]}/{self.day.replace('-', '')}.json", params={"t": int(time.time())}, timeout=60)
+            r.raise_for_status()
+            j = r.json()
+        except Exception as e:  # noqa: BLE001
+            log("結果の取得に失敗:", e)
+            return {}
+        out = {}
+        for jcd, st in (j.get("programs", {}).get("stadiums") or {}).items():
+            for rno, rc in (st.get("races") or {}).items():
+                res = rc.get("result") or {}
+                q = (res.get("payouts") or {}).get("quinella") or []
+                if (rc.get("date") or "") != self.day or not q:
+                    continue
+                out[f"{int(jcd)}-{int(rno)}"] = ({x.get("combination"): x.get("amount") or 0 for x in q}, [int(b) for b in (res.get("refunds") or [])])
+        return out
+
+    def day_summary(self, wait_minutes: float = 100):
+        """今日の最後のレースが終わったら1回だけ通知: 2連複の割れ狙い（確率20%以上）を買っていたら今日どうだったか（仮想）"""
+        if not NOTIFY.get("topic") or not NOTIFY.get("summary") or self.store.get("summary_sent"):
+            return
+        min_p = float(NOTIFY.get("min_p", 0.2))
+        split = {k: v["d"] for k, v in (self.store.get("picks") or {}).items()
+                 if (v.get("d") or {}).get("top") and (v["d"].get("state") == "buy" or v["d"].get("why") == "lowp")}
+        until = time.time() + wait_minutes * 60
+        while True:   # 公開データに結果が出るのを待つ（約10分おきの更新）
+            res = self.day_results()
+            pending = [k for k in split if k not in res]
+            if not pending or time.time() > until:
+                break
+            log(f"まとめの通知: 結果待ち {len(pending)} レース")
+            time.sleep(300)
+        stake = max(100, int(NOTIFY.get("bank", 500000) / 200 / 100) * 100)
+        dls = self.store.get("deadlines") or {}
+        def score(keys):
+            n = hits = 0; ret = 0.0; lines = []
+            for k in sorted(keys, key=lambda k: dls.get(k, "99:99")):
+                d = split[k]; c = d["top"]["combo"]
+                if k not in res:
+                    lines.append(f"{dls.get(k, '')} {VENUE.get(int(k.split('-')[0]), k)}{k.split('-')[1]}R {c} 結果待ち"); continue
+                pay, refunds = res[k]
+                n += 1
+                if any(int(b) in refunds for b in c.split("=")):
+                    ret += 1; lines.append(f"{dls.get(k, '')} {VENUE.get(int(k.split('-')[0]), k)}{k.split('-')[1]}R {c} 返還"); continue
+                a = pay.get(c, 0) / 100
+                if a:
+                    hits += 1; ret += a
+                lines.append(f"{dls.get(k, '')} {VENUE.get(int(k.split('-')[0]), k)}{k.split('-')[1]}R {c} " + (f"◎的中 {a:.1f}倍" if a else "外れ"))
+            return n, hits, ret, lines
+        hi = [k for k, d in split.items() if d["top"]["p"] >= min_p]
+        lo = [k for k, d in split.items() if d["top"]["p"] < min_p]
+        n, hits, ret, lines = score(hi)
+        ln, lhits, lret, _ = score(lo)
+        if n:
+            gain = (ret - n) * stake
+            title = f"今日の割れ狙い（仮想） {n}点 {hits}本的中 回収{ret / n * 100:.0f}% {'+' if gain >= 0 else ''}{gain:,.0f}円"
+        else:
+            title = "今日の割れ狙い（仮想） 買いになったレースはありませんでした"
+        body = "\n".join(lines)
+        body += f"\n\n1点{stake:,}円で計算（自分の賭け金でオッズが下がる分は引く前）"
+        if ln:
+            body += f"\n確率{min_p * 100:.0f}%未満で見送った分: {ln}点 {lhits}本的中 回収{lret / ln * 100:.0f}%"
+        msg = {"topic": NOTIFY["topic"], "title": title, "message": body, "tags": ["bar_chart"], "priority": 3, "click": NOTIFY.get("page", "")}
+        try:
+            r = self.s.post("https://ntfy.sh/", data=json.dumps(msg, ensure_ascii=False).encode("utf-8"), timeout=15)
+            log(f"まとめの通知（{r.status_code}）: {title}")
+            if r.status_code == 200:
+                self.store["summary_sent"] = datetime.now(JST).isoformat(timespec="seconds")
+                self.dirty = True
+        except Exception as e:  # noqa: BLE001
+            log("まとめの通知に失敗:", e)
+
     def run(self, max_minutes: float, once: bool):
         started = time.time()
         while True:
@@ -686,6 +761,8 @@ class Live:
                     if not self.capture_laps(datetime.now(JST), limit=6):
                         break
                 log("今日のレースは終わりました")
+                if not once:
+                    self.day_summary()
                 break
             self.capture_final(self.final_targets(now)[:3])  # 締切1分前の2連単オッズを最優先
             if self.dirty:
