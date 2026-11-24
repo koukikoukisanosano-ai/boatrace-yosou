@@ -1,6 +1,6 @@
 // 予想ページ: データを読み込んで、スマホの中で予想を計算して表示する
 // 古いファイルがスマホに残らないよう、ページと同じ版の印（?v=）を付けて読む
-const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, oddsMap, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, WIN_RULE, SPLIT_MIN_ODDS, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
+const { normalizeDay, prepareModel, predictRace, Snapshot, previewState, exactaMap, quinellaMap, oddsMap, evPicks, QUINELLA_RULE, WIDE_RULE, TRIO_RULE, WIN_RULE, SPLIT_MIN_ODDS, SPLIT_MIN_P, splitBuy, formation, FEATURE_INDEX, RANK_LABEL } = await import(`./core.js${new URL(import.meta.url).search}`);
 
 const OPENAPI = 'https://boatraceopenapi.github.io/api/v1';
 const REFRESH_MS = 60 * 1000;
@@ -242,7 +242,7 @@ function filtered() {
   else rs = rs.filter((r) => minsLeft(r) <= -KEEP_MIN || (r.hasResult && minsLeft(r) <= 0)).reverse();
   // 絞った表示: 見送りのレースは隠す（「見送りも表示」で出す）
   const wbuy = (r) => r.botPick && r.botPick.w && r.botPick.w.state === 'buy';
-  if (SPLIT() && !state.showPass) rs = rs.filter((r) => (!(r.botPick && r.botPick.d && r.botPick.d.state === 'pass') && !(r.hasResult && !(r.botPick && r.botPick.d))));
+  if (SPLIT() && !state.showPass) rs = rs.filter((r) => (!(r.botPick && r.botPick.d && !splitBuy(r.botPick.d)) && !(r.hasResult && !(r.botPick && r.botPick.d))));
   return rs;
 }
 
@@ -296,7 +296,7 @@ function raceRow(r) {
   }
   if (SPLIT()) picks = `<span class="picks">${splitTag(r)}</span>`;
   else picks = `<span class="picks">${triTag(r, pr)}</span>`;
-  return `<article class="race${(SPLIT() ? r.botPick && r.botPick.d && r.botPick.d.state === 'buy' : getForm(r.id).f.some((x) => x.length)) ? ' is-buy' : ''}" id="r-${r.id}">
+  return `<article class="race${(SPLIT() ? splitBuy(r.botPick && r.botPick.d) : getForm(r.id).f.some((x) => x.length)) ? ' is-buy' : ''}" id="r-${r.id}">
     <button type="button" class="race-head" aria-expanded="${open}" data-id="${r.id}">
       <span class="rh-time"><span class="t">${r.closedAt || '--:--'}</span><span class="r">${r.rno}R</span></span>
       <span class="rh-name"><span class="v">${esc(r.venue)}</span><span class="sub">${esc(r.subtitle || '')}</span></span>
@@ -448,7 +448,7 @@ function evHtml(r, pr) {
 // 2連複「予想と人気が割れた時」: 一覧の札・詳細・当たり外れ
 function splitResult(r) {
   const d = r.botPick && r.botPick.d;
-  if (!d || d.state !== 'buy' || !r.hasResult) return null;
+  if (!splitBuy(d) || !r.hasResult) return null;
   const paid = (r.payouts && r.payouts.quinella) || [];
   const a = (paid.find((x) => x.combo === d.picks[0].combo) || {}).amount || 0;
   return { hit: a > 0, odds: a / 100 };
@@ -456,7 +456,7 @@ function splitResult(r) {
 function splitTag(r) {
   const d = r.botPick && r.botPick.d;
   if (!d) return r.hasResult ? '<span class="bet pass">判定なし</span>' : minsLeft(r) > 3.5 ? '<span class="bet pass">締切2〜3分前に判定</span>' : '<span class="bet pass">判定中</span>';
-  if (d.state !== 'buy') return `<span class="bet pass">見送り（${d.why === 'same' ? '予想と人気が同じ' : d.why === 'low' ? `${SPLIT_MIN_ODDS}倍未満` : 'オッズなし'}）</span>`;
+  if (!splitBuy(d)) return `<span class="bet pass">見送り（${d.why === 'same' ? '予想と人気が同じ' : d.why === 'low' ? `${SPLIT_MIN_ODDS}倍未満` : d.why === 'no-odds' ? 'オッズなし' : `確率${pct(SPLIT_MIN_P)}%未満`}）</span>`;
   const t = d.picks[0], res = splitResult(r);
   const mark = res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? `的中 ${res.odds.toFixed(1)}倍 +${yen(res.odds * stake() - stake())}` : '外れ'}</span>` : '';
   return `<span class="bet buy">買い 2連複 <b class="num">${t.combo}</b> ${t.odds.toFixed(1)}倍 ${yen(stake())}</span>${mark}`;
@@ -469,9 +469,9 @@ function splitDetail(r, pr) {
     const res = splitResult(r);
     const paid = (r.payouts && r.payouts.quinella) || [];
     const came = r.hasResult && paid.length ? `<div class="k">結果の2連複: <b class="num">${paid.map((x) => x.combo).join(' ')}</b> ${paid.map((x) => `${(x.amount / 100).toFixed(1)}倍`).join(' ')}</div>` : '';
-    head = `<div class="rec main-bet"><div class="rec-h"><b>${d.state === 'buy' ? '買い' : '見送り'}</b>${res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? '的中' : '外れ'}</span>` : ''}</div>
+    head = `<div class="rec main-bet"><div class="rec-h"><b>${splitBuy(d) ? '買い' : '見送り'}</b>${res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? '的中' : '外れ'}</span>` : ''}</div>
     <div class="ev-sum"><span>予想の1番 <b class="num">${t.combo}</b> 確率${pct(t.p, 1)}%・${t.odds ? t.odds.toFixed(1) : '-'}倍</span><span>人気の1番 <b class="num">${f.combo || '-'}</b> ${f.odds ? f.odds.toFixed(1) : '-'}倍</span></div>
-    ${came}<div class="rule">予想の1番と人気の1番が違い、予想の1番が${SPLIT_MIN_ODDS}倍以上なら1点買い（締切約2〜3分前のオッズで判定）</div></div>`;
+    ${came}<div class="rule">予想の1番と人気の1番が違い、予想の1番が${SPLIT_MIN_ODDS}倍以上・確率${pct(SPLIT_MIN_P)}%以上なら1点買い（締切約2〜3分前のオッズで判定）</div></div>`;
   }
   if (!pr) return head;
   // どの艇が来やすいか: 1着と2着以内（2連複に効くのは2着以内）の確率
@@ -487,7 +487,7 @@ function splitDetail(r, pr) {
   const qm = r.odds && r.odds.q ? quinellaMap(r.odds.q) : null;
   const qpaid = ((r.payouts && r.payouts.quinella) || []).map((x) => x.combo);
   const favc = d && d.fav ? d.fav.combo : (qm ? Object.entries(qm).filter(([, o]) => o > 0).sort((a, b) => a[1] - b[1])[0]?.[0] : null);
-  const pick = d && d.state === 'buy' ? d.picks[0].combo : null;
+  const pick = splitBuy(d) ? d.picks[0].combo : null;
   const qrows = (pr.quinella || []).slice(0, 10).map((t) => {
     const o = qm && qm[t.combo];
     const ev = o ? o * t.p : null;
@@ -974,7 +974,7 @@ function render() {
   if (!state.races.length) { list.innerHTML = state.loading ? '' : '<div class="note">この日のレースはありません。</div>'; return; }
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
-  if (SPLIT() && state.view === 'done') html += splitScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue)) + renderSim(DKEY, '仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', D_SIM_FROM, D_SIM_FROM,
+  if (SPLIT() && state.view === 'done') html += splitScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue)) + renderSim(DKEY, '仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', D_SIM_FROM, '2026-11-25',
     '<div class="k">締切約2〜3分前に実際に決めた買い目とその時のオッズで計算。2連複の売上を1レース20万円と仮定して、自分の賭け金でオッズが下がる分を差し引いています（翌朝に前日分を記録）</div>', true);
   else if (state.view === 'done' && !SPLIT()) html += triScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue));
   else if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', Q_SIM_FROM, Q_LIVE_FROM,
@@ -983,7 +983,7 @@ function render() {
     '<div class="k">確率が一番高い3連複で期待値1.2以上のときだけ。締切約2〜3分前に実際に決めた買い目とその時のオッズで計算し、3連複の売上を1レース50万円と仮定して差し引いています（翌朝に前日分を記録）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
   if (!rs.length) html += `<div class="note">${SPLIT() && !state.showPass ? (state.view === 'upcoming' ? 'これから締切の買いのレースはありません（判定は締切約2〜3分前）。' : '買いになったレースはまだありません。') : state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   if (SPLIT()) {
-    const nPass = state.races.filter((r) => (state.venue === 0 || r.jcd === state.venue) && r.botPick && r.botPick.d && r.botPick.d.state === 'pass').length;
+    const nPass = state.races.filter((r) => (state.venue === 0 || r.jcd === state.venue) && r.botPick && r.botPick.d && !splitBuy(r.botPick.d)).length;
     html += `<div class="note"><button type="button" class="linkish" id="togglePass">${state.showPass ? '見送りのレースを隠す' : `見送りのレースも表示（今日${nPass}レース）`}</button></div>`;
   }
   html += rs.map(raceRow).join('');
@@ -996,7 +996,7 @@ function renderFooter() {
   if (!m) return;
   const lines = [];
   if (SPLIT()) {
-    lines.push(`買い方: 予想の確率1番の2連複が、オッズの1番人気と違い、${SPLIT_MIN_ODDS}倍以上ついていたら1点買う（締切約2〜3分前に判定・通知）。2026年1〜10月の公平な検証（確定オッズ）で5〜10倍は回収率109%・的中率18%。実際に決める時点のオッズでは下がる見込みのため、今は記録で確かめている段階です。`);
+    lines.push(`買い方: 予想の確率1番の2連複が、オッズの1番人気と違い、${SPLIT_MIN_ODDS}倍以上で、確率が${pct(SPLIT_MIN_P)}%以上なら1点買う（締切約2〜3分前に判定・通知）。確率${pct(SPLIT_MIN_P)}%以上の条件は11/25から（過去の検証の前半・後半と、11/20〜24の実際の記録で、${pct(SPLIT_MIN_P)}%未満は回収率が低かったため）。損益のグラフは11/24までも同じ条件を後から当てはめた分（青の線）で、11/25からが本番（緑の線）です。`);
     lines.push(`予想モデル: ${m.trained_until || '-'} まで学習。予想は参考情報です。舟券の購入は20歳以上、余裕のある範囲で。`);
     $('#foot').innerHTML = lines.map((x) => `<p>${x}</p>`).join('');
     return;

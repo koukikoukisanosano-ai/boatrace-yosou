@@ -719,7 +719,10 @@ export function wideMap(k) {
 }
 // 2連複「予想と人気が割れた時」（記録・通知のメイン）: 予想の確率1番の2連複が、オッズの1番人気と違い、5倍以上ついていたら1点買う
 //   2026年1〜10月の公平な検証（確定オッズ）で 5〜10倍 109%・10〜20倍 136%、的中率18%前後・1日9〜10レース
+//   11/25から: 予想の1番の確率が20%以上のときだけ（過去の前半・後半とも、20%未満は回収率が低かった。11/20〜24の実際の記録でも 20%以上 138%・未満 62%）
 export const SPLIT_MIN_ODDS = 5;
+export const SPLIT_MIN_P = 0.2;
+export const splitBuy = (d) => !!(d && d.state === 'buy' && d.top && d.top.p >= SPLIT_MIN_P);   // 前の日の記録（20%未満も買いだった）にも同じ条件を当てはめる
 export function splitPick(pr, race) {
   const om = race && race.odds ? quinellaMap(race.odds.q) : null;
   if (!pr || !pr.base || !om) return null;
@@ -728,8 +731,9 @@ export function splitPick(pr, race) {
   const top = r.top[0];
   let fav = null;
   for (const [c, o] of Object.entries(om)) if (o > 0 && (!fav || o < fav.odds)) fav = { combo: c, odds: o };
-  const buy = fav && top.combo !== fav.combo && top.odds >= SPLIT_MIN_ODDS;
-  return { state: buy ? 'buy' : 'pass', why: !fav ? 'no-odds' : top.combo === fav.combo ? 'same' : top.odds < SPLIT_MIN_ODDS ? 'low' : 'split',
+  const split = fav && top.combo !== fav.combo && top.odds >= SPLIT_MIN_ODDS;
+  const buy = split && top.p >= SPLIT_MIN_P;
+  return { state: buy ? 'buy' : 'pass', why: !fav ? 'no-odds' : top.combo === fav.combo ? 'same' : top.odds < SPLIT_MIN_ODDS ? 'low' : !buy ? 'lowp' : 'split',
     picks: buy ? [{ combo: top.combo, p: +top.p.toFixed(4), odds: top.odds, ev: +(top.p * top.odds).toFixed(3) }] : [],
     top: { combo: top.combo, p: +top.p.toFixed(4), odds: top.odds }, fav };
 }

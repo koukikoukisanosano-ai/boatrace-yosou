@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { normalizeDay, Snapshot, prepareModel, predictRace, evPicks } from '../docs/js/core.js';
+import { normalizeDay, Snapshot, prepareModel, predictRace, evPicks, SPLIT_MIN_P } from '../docs/js/core.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const OUT = path.join(ROOT, 'docs', 'data', 'report.json');
@@ -21,7 +21,8 @@ const EV_RULES = model.bet ? [{ kind: 'exacta', title: '2連単 期待値の買�
 const QKEY = '2連複（記録のみ）';
 const KKEY = '拡連複（記録のみ）';
 const FKEY = '3連複（記録のみ）';
-const DKEY = '2連複 予想と人気が割れた時';
+const DKEY = '2連複 予想と人気が割れた時';                    // 11/25から確率20%以上だけ（前の日にも同じ条件を当てはめて記録）
+const DLKEY = '2連複 割れ狙い（確率20%未満・記録のみ）';     // 割れていて5倍以上だが確率20%未満（買わない）
 const WKEY = '単勝（記録のみ）';
 const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: 'quinella', quinella_place: 'wide', win: 'win', place: 'place' };
 
@@ -74,15 +75,18 @@ for (const ymd of dates) {
         if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, n]); }
       }
     }
-    // 2連複「予想と人気が割れた時」（メイン）: docs/live の picks[].d
-    if (lq && lq.d && lq.d.state) {
-      const x = s.rec[DKEY] || (s.rec[DKEY] = { bets: 0, hits: 0, ret: 0, races: 0, hitOdds: [] });
+    // 2連複「予想と人気が割れた時」（メイン）: docs/live の picks[].d。確率20%以上 → DKEY、20%未満 → DLKEY（記録のみ）
+    if (lq && lq.d && lq.d.state && lq.d.top) {
+      const d = lq.d;
+      const split = d.state === 'buy' || d.why === 'lowp';
+      const key = split ? (d.top.p >= SPLIT_MIN_P ? DKEY : DLKEY) : DKEY;
+      const x = s.rec[key] || (s.rec[key] = { bets: 0, hits: 0, ret: 0, races: 0, hitOdds: [] });
       x.races++;
-      for (const t of lq.d.picks || []) {
+      if (split) {
+        const c = d.top.combo;
         x.bets++;
-        if (t.combo.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
-        const a = pay(r.payouts.quinella || [], t.combo);
-        if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, 1]); }
+        if (c.split('=').map(Number).some((b) => refundsN.includes(b))) x.ret += 100;
+        else { const a = pay(r.payouts.quinella || [], c); if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, 1]); } }
       }
     }
     // 単勝（記録のみ）: docs/live の picks[].w
