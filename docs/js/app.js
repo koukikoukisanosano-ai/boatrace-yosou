@@ -242,7 +242,9 @@ function filtered() {
   else rs = rs.filter((r) => minsLeft(r) <= -KEEP_MIN || (r.hasResult && minsLeft(r) <= 0)).reverse();
   // 絞った表示: 見送りのレースは隠す（「見送りも表示」で出す）
   const wbuy = (r) => r.botPick && r.botPick.w && r.botPick.w.state === 'buy';
-  if (SPLIT() && !state.showPass) rs = rs.filter((r) => (!(r.botPick && r.botPick.d && !splitBuy(r.botPick.d)) && !(r.hasResult && !(r.botPick && r.botPick.d))));
+  // 締切前のタブでは、見送りでも結果が出るまでは残す（締切2〜3分前の判定で消えると、レース中に予想を見られなくなるため）。開いているレースも残す
+  if (SPLIT() && !state.showPass) rs = rs.filter((r) => state.open.has(r.id) || (state.view === 'upcoming' && !r.hasResult)
+    || (!(r.botPick && r.botPick.d && !splitBuy(r.botPick.d)) && !(r.hasResult && !(r.botPick && r.botPick.d))));
   return rs;
 }
 
@@ -296,7 +298,7 @@ function raceRow(r) {
   }
   if (SPLIT()) picks = `<span class="picks">${splitTag(r)}</span>`;
   else picks = `<span class="picks">${triTag(r, pr)}</span>`;
-  return `<article class="race${(SPLIT() ? splitBuy(r.botPick && r.botPick.d) : getForm(r.id).f.some((x) => x.length)) ? ' is-buy' : ''}" id="r-${r.id}">
+  return `<article class="race${(SPLIT() ? splitBuy(r.botPick && r.botPick.d) : getForm(r.id).f.some((x) => x.length)) ? ' is-buy' : ''}${SPLIT() && r.botPick && r.botPick.d && !splitBuy(r.botPick.d) ? ' is-pass' : ''}" id="r-${r.id}">
     <button type="button" class="race-head" aria-expanded="${open}" data-id="${r.id}">
       <span class="rh-time"><span class="t">${r.closedAt || '--:--'}</span><span class="r">${r.rno}R</span></span>
       <span class="rh-name"><span class="v">${esc(r.venue)}</span><span class="sub">${esc(r.subtitle || '')}</span></span>
