@@ -420,12 +420,13 @@ class Live:
                 self.store["picks"][key]["d"] = d                # 2連複「予想と人気が割れた時」（メイン）
             if NOTIFY.get("mode") == "split":   # 通知はこの買い方だけ（docs/notify.json の mode: split）
                 self.dirty = True
-                if d.get("state") != "buy" or not NOTIFY.get("topic") or not NOTIFY.get("per_race", True):
+                race_topic = NOTIFY.get("topic_race") or NOTIFY.get("topic")   # 買い目の通知は別のトピック（まとめと分けて、受け取るかを選べる）
+                if d.get("state") != "buy" or not race_topic or not NOTIFY.get("per_race", True):
                     continue   # per_race: false → レースごとの通知はしない（1日の最後のまとめだけ: day_summary）
                 t, fav = d["picks"][0], d.get("fav") or {}
                 dl = self.deadline_of(key)
                 left = f"\n締切まで約{max(1, int((dl - now).total_seconds() // 60))}分" if dl else ""
-                msg = {"topic": NOTIFY["topic"], "title": f"2連複 {t['combo']} {t['odds']:.1f}倍｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
+                msg = {"topic": race_topic, "title": f"2連複 {t['combo']} {t['odds']:.1f}倍｜{o['venue']}{o['rno']}R {o['closedAt']}締切",
                        "message": f"予想の1番 {t['combo']}（確率{t['p'] * 100:.1f}%・{t['odds']:.1f}倍）\n人気の1番 {fav.get('combo', '-')}（{fav.get('odds', 0):.1f}倍）{left}",
                        "tags": ["dart"], "priority": 4, "click": NOTIFY.get("page", "")}
                 try:

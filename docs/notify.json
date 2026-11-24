@@ -5,7 +5,8 @@
  "lead_min": 2,
  "exacta": false,
  "mode": "split",
- "per_race": false,
+ "per_race": true,
  "summary": true,
- "min_p": 0.2
+ "min_p": 0.2,
+ "topic_race": "boatrace-yosou-038de678dd-kaime"
 }

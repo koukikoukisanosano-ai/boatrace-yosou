@@ -899,7 +899,7 @@ function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = 
   const S = simulate(start, key, from, liveFrom);
   const SIM_FROM = from;
   if (S.pts.length < 3) return `<section class="score"><h2>${title}（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>${note}<div class="k">${S.pts.length === 2 ? `1日目 ${S.bank - start >= 0 ? '+' : ''}${yen(S.bank - start)}（${S.bets}点）` : '毎朝、前日の分を記録します'}</div></section>`;
-  const W = 340, H = 170, L = 4, T = 8, B = 18;
+  const W = 340, H = 170, L = 16, T = 10, B = 20;
   const vals = S.pts.map((p) => p.bank);
   const lo = Math.min(start, ...vals), hi = Math.max(start, ...vals);
   const x = (i) => L + (W - L * 2) * i / (S.pts.length - 1);
@@ -909,8 +909,11 @@ function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = 
   segs.forEach((a, k) => { segs[k] = a.map((i) => `${x(i).toFixed(1)},${y(S.pts[i].bank).toFixed(1)}`); });
   const cls = ['sim-dev', 'sim-hold', 'sim-live'];
   const lines = segs.map((pp, k) => (pp.length > 1 ? `<polyline class="${cls[k]}" points="${pp.join(' ')}"/>` : '')).join('');
-  const lab = (i) => { const d = S.pts[i].d; return d ? `${+d.slice(4, 6)}/${+d.slice(6, 8)}` : ''; };
-  const xt = [1, Math.floor(S.pts.length / 2), S.pts.length - 1].map((i) => `<text x="${x(i).toFixed(1)}" y="${H - 4}" text-anchor="${i === 1 ? 'start' : i === S.pts.length - 1 ? 'end' : 'middle'}">${lab(i)}</text>`).join('');
+  // 1日＝1つの点。日付は点の真下に（多い日は間引く）。左端の点は記録を始める前の入金額
+  const lab = (i) => { const d = S.pts[i].d; return d ? `${+d.slice(4, 6)}/${+d.slice(6, 8)}` : '開始'; };
+  const every = Math.max(1, Math.ceil((S.pts.length - 1) / 7));
+  const dots = S.pts.map((p, i) => (i ? `<circle class="${cls[p.seg]}-dot" cx="${x(i).toFixed(1)}" cy="${y(p.bank).toFixed(1)}" r="2.6"/>` : '')).join('');
+  const xt = S.pts.map((p, i) => ((i === 0 || i === S.pts.length - 1 || (i % every === 0 && S.pts.length - 1 - i >= every / 2)) ? `<text x="${x(i).toFixed(1)}" y="${H - 5}" text-anchor="middle">${lab(i)}</text>` : '')).join('');
   const gain = S.bank - start;
   return `<section class="score"><h2>${title}（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>
     <div class="grid">
@@ -918,7 +921,7 @@ function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = 
       <div><div class="k">回収率（${S.bets.toLocaleString()}点）</div><div class="v">${pct(S.roi)}<small>%</small></div>${showRaw ? `<div class="k">差し引く前 ${pct(S.rawRoi)}%</div>` : ''}</div>
       <div><div class="k">最大の落ち込み</div><div class="v">${Math.round(S.dd / 1000).toLocaleString()}<small>千円</small></div></div>
     </div>
-    <svg class="sim" viewBox="0 0 ${W} ${H}" role="img" aria-label="残高の推移"><line class="base" x1="${L}" x2="${W - L}" y1="${y(start).toFixed(1)}" y2="${y(start).toFixed(1)}"/>${lines}${xt}</svg>${note}
+    <svg class="sim" viewBox="0 0 ${W} ${H}" role="img" aria-label="残高の推移"><line class="base" x1="${L}" x2="${W - L}" y1="${y(start).toFixed(1)}" y2="${y(start).toFixed(1)}"/>${lines}${dots}${xt}</svg>${note}
 
   </section>`;
 }
@@ -1079,21 +1082,29 @@ $('#next').addEventListener('click', () => {
 $('#reload').addEventListener('click', () => refresh(false));
 // 通知（ntfy）: 買い目が決まったら（締切約2〜3分前）スマホに知らせる
 let notifyCfg = null;
+let notifyKind = '';
 async function renderNotify() {
   if (!notifyCfg) { try { notifyCfg = (await getJSON('notify.json', 'no-cache')).json; } catch (e) { return; } }
   const el = $('#notifyPanel');
-  el.innerHTML = `<p>${notifyCfg.per_race === false ? `今は仮想で記録中なので、レースごとの通知は止めています。毎晩その日の最後のレースが終わって結果が出たら、2連複の割れ狙い（確率${Math.round((notifyCfg.min_p || 0.2) * 100)}%以上）を買っていたらどうだったかを1回だけ通知します。` : '締切の約2〜3分前に買い目が決まると、スマホに通知します（ページを開いていなくても届きます）。'}</p>
+  const race = notifyKind === 'race';
+  const topic = race ? (notifyCfg.topic_race || notifyCfg.topic) : notifyCfg.topic;
+  const minp = Math.round((notifyCfg.min_p || 0.2) * 100);
+  const what = race
+    ? (notifyCfg.per_race === false ? '買い目の通知は今は止めています。' : `締切の約2〜3分前に、2連複の割れ狙い（確率${minp}%以上）の買い目が決まるたびに通知します（1日10点前後）。今は仮想で記録中なので、買うかどうかはご自身で。`)
+    : `毎晩、その日の最後のレースの結果が出たら1回だけ、2連複の割れ狙い（確率${minp}%以上）を買っていたらどうだったか（的中・回収率・損益）を通知します。`;
+  el.innerHTML = `<p><b>${race ? '買い目の通知' : 'まとめの通知'}</b>: ${what}ページを開いていなくても届きます。</p>
     <ol><li>App Store で「ntfy」アプリを入れる（無料）</li>
-    <li>アプリの「＋」で、トピック名に <b class="num">${esc(notifyCfg.topic)}</b> を入れて登録</li></ol>
-    <p><a href="https://ntfy.sh/${encodeURIComponent(notifyCfg.topic)}" target="_blank" rel="noopener">ブラウザで通知の一覧を見る</a>　通知の金額は入金${Math.round(notifyCfg.bank / 10000)}万円で計算しています。</p>`;
+    <li>アプリの「＋」で、トピック名に <b class="num">${esc(topic)}</b> を入れて登録</li></ol>
+    <p>やめたいときは、アプリでこのトピックを消すだけです。両方登録すれば両方届きます。<br><a href="https://ntfy.sh/${encodeURIComponent(topic)}" target="_blank" rel="noopener">ブラウザで通知の一覧を見る</a>　金額は入金${Math.round(notifyCfg.bank / 10000)}万円で計算しています。</p>`;
 }
-function renderBank() { $('#bank').value = state.bank; $('#stake').textContent = yen(stake()); }
-$('#bank').addEventListener('change', (e) => {
-  const v = Math.max(0, Math.round(+e.target.value || 0));
-  state.bank = v || 500000; savePref('bank2', String(state.bank)); renderBank(); render();
-});
-renderBank();
-$('#notifyBtn').addEventListener('click', () => { const el = $('#notifyPanel'); el.hidden = !el.hidden; if (!el.hidden) renderNotify(); });
+document.querySelectorAll('[data-notify]').forEach((btn) => btn.addEventListener('click', () => {
+  const el = $('#notifyPanel');
+  const k = btn.dataset.notify;
+  el.hidden = !el.hidden && notifyKind === k;
+  notifyKind = k;
+  document.querySelectorAll('[data-notify]').forEach((x) => x.setAttribute('aria-pressed', String(!el.hidden && x.dataset.notify === notifyKind)));
+  if (!el.hidden) renderNotify();
+}));
 
 // 締切直前のオッズ: 開いているレースが締切3分前〜締切のあいだは、15秒ごとに GitHub から直接読む（公開の反映を待たない）
 const LIVE_API = 'https://api.github.com/repos/koukikoukisanosano-ai/boatrace-yosou/contents/docs/live';
