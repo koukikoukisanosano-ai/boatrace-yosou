@@ -27,7 +27,10 @@ const LIST = { trifecta: 'trifecta', trio: 'trio', exacta: 'exacta', quinella: '
 
 for (const ymd of dates) {
   const compact = ymd.replace(/-/g, '');
-  if (model.trained_until && model.trained_until >= ymd) { console.error(`${ymd}: モデルがこの日を学習済みなので記録しません`); continue; }
+  // モデルがこの日を学習済み（月曜の学習し直しの後など）: 予想し直す成績は記録しない（ずるになる）。
+  // 締切前に実際に決めた買い目（docs/live の picks）の成績は、その時のモデルで決めたものなので記録する
+  const liveOnly = !!(model.trained_until && model.trained_until >= ymd);
+  if (liveOnly) console.error(`${ymd}: モデルがこの日を学習済みなので、締切前に決めた買い目の記録だけ`);
   const stateFile = path.join(ROOT, 'docs', 'data', 'state', `${compact}.json`);
   const dayFile = path.join(ROOT, 'data', 'openapi', ymd.slice(0, 4), `${compact}.json.gz`);
   if (!fs.existsSync(stateFile) || !fs.existsSync(dayFile)) { console.error(`${ymd}: 近況か結果のデータがありません`); continue; }
@@ -44,41 +47,8 @@ for (const ymd of dates) {
     if (!r.hasResult || r.preview === 'none') continue;
     const tp = r.payouts.trifecta || [];
     if (!tp.length) continue;
-    const pr = predictRace(r, model, snap);
-    if (!pr) continue;
-    s.races++;
-    if (pr.base) {
-      const ex = {}; const B = pr.boats;
-      const perms = []; for (let a = 0; a < B.length; a++) for (let b = 0; b < B.length; b++) if (b !== a) for (let c = 0; c < B.length; c++) if (c !== a && c !== b) perms.push([a, b]);
-      pr.base.forEach((p, k) => { const key = `${B[perms[k][0]].waku}-${B[perms[k][1]].waku}`; ex[key] = (ex[key] || 0) + p; });
-      preds[`${r.jcd}-${r.rno}`] = Object.fromEntries(Object.entries(ex).map(([k, v]) => [k, +v.toPrecision(5)]));
-    }
-    const winner = r.boats.find((b) => b.place === 1);
-    const best = pr.probs.win.indexOf(Math.max(...pr.probs.win));
-    if (winner && pr.boats[best].waku === winner.waku) s.top1++;
     const pay = (list, combo) => { const x = list.find((p) => p.combo === combo); return x ? x.amount : 0; };
-    const t1 = pay(tp, pr.trifecta[0].combo);
-    if (t1) { s.tri1++; s.tri1Ret += t1; }
-    let hit5 = false;
-    for (const t of pr.trifecta.slice(0, 5)) { const a = pay(tp, t.combo); if (a) { hit5 = true; s.tri5Ret += a; } }
-    if (hit5) s.tri5++;
-    const e1 = pay(r.payouts.exacta || [], pr.exacta[0].combo);
-    if (e1) { s.ex1++; s.ex1Ret += e1; }
-    if (pr.withOdds) s.withOdds++;
-    // 期待値の買い方の成績（締切前に取ったオッズで選び、払戻で答え合わせ）
     const refundsN = (r.refunds || []).map(Number);
-    for (const er of EV_RULES) {
-      const res = evPicks(pr, r, er.rule, er.kind);
-      if (!res) continue;
-      const x = s.rec[er.title] || (s.rec[er.title] = { bets: 0, hits: 0, ret: 0, races: 0 });
-      x.races++;
-      for (const t of res.picks) {
-        x.bets++;
-        if (t.combo.split('-').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
-        const a = pay(r.payouts[er.kind] || [], t.combo);
-        if (a) { x.hits++; x.ret += a; }
-      }
-    }
     // 2連複（記録のみ・お金はかけない）: 締切約2〜3分前に実際に決めた買い目（docs/live の picks[].q）
     const lq = live && live.picks && live.picks[`${r.jcd}-${r.rno}`];
     if (lq && lq.q && lq.q.state) {
@@ -138,6 +108,40 @@ for (const ymd of dates) {
         if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, n]); }
       }
     }
+    if (liveOnly) { s.races++; continue; }
+    const pr = predictRace(r, model, snap);
+    if (!pr) continue;
+    s.races++;
+    if (pr.base) {
+      const ex = {}; const B = pr.boats;
+      const perms = []; for (let a = 0; a < B.length; a++) for (let b = 0; b < B.length; b++) if (b !== a) for (let c = 0; c < B.length; c++) if (c !== a && c !== b) perms.push([a, b]);
+      pr.base.forEach((p, k) => { const key = `${B[perms[k][0]].waku}-${B[perms[k][1]].waku}`; ex[key] = (ex[key] || 0) + p; });
+      preds[`${r.jcd}-${r.rno}`] = Object.fromEntries(Object.entries(ex).map(([k, v]) => [k, +v.toPrecision(5)]));
+    }
+    const winner = r.boats.find((b) => b.place === 1);
+    const best = pr.probs.win.indexOf(Math.max(...pr.probs.win));
+    if (winner && pr.boats[best].waku === winner.waku) s.top1++;
+    const t1 = pay(tp, pr.trifecta[0].combo);
+    if (t1) { s.tri1++; s.tri1Ret += t1; }
+    let hit5 = false;
+    for (const t of pr.trifecta.slice(0, 5)) { const a = pay(tp, t.combo); if (a) { hit5 = true; s.tri5Ret += a; } }
+    if (hit5) s.tri5++;
+    const e1 = pay(r.payouts.exacta || [], pr.exacta[0].combo);
+    if (e1) { s.ex1++; s.ex1Ret += e1; }
+    if (pr.withOdds) s.withOdds++;
+    // 期待値の買い方の成績（締切前に取ったオッズで選び、払戻で答え合わせ）
+    for (const er of EV_RULES) {
+      const res = evPicks(pr, r, er.rule, er.kind);
+      if (!res) continue;
+      const x = s.rec[er.title] || (s.rec[er.title] = { bets: 0, hits: 0, ret: 0, races: 0 });
+      x.races++;
+      for (const t of res.picks) {
+        x.bets++;
+        if (t.combo.split('-').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; continue; }
+        const a = pay(r.payouts[er.kind] || [], t.combo);
+        if (a) { x.hits++; x.ret += a; }
+      }
+    }
     // おすすめの買い方の成績
     for (const rc of (model.bet ? [] : recs)) {
       const list = pr[LIST[rc.bet]] || [];
@@ -154,6 +158,13 @@ for (const ymd of dates) {
     }
   }
   if (!s.races) { console.error(`${ymd}: 対象レースなし`); continue; }
+  if (liveOnly) {   // 前に記録した分（予想し直した成績）は残し、締切前に決めた買い目の記録だけ入れ替える
+    const prev = report.days.find((d) => d.date === ymd);
+    const merged = prev ? { ...prev, rec: { ...(prev.rec || {}), ...s.rec } } : { ...s, liveOnly: true };
+    report.days = report.days.filter((d) => d.date !== ymd).concat([merged]).sort((a, b) => (a.date < b.date ? -1 : 1)).slice(-120);
+    console.log(`${ymd}: 締切前に決めた買い目の記録 ${Object.entries(s.rec).map(([k, v]) => `${k} ${v.bets}点`).join(' / ')}`);
+    continue;
+  }
   const pdir = path.join(ROOT, 'data', 'preds', ymd.slice(0, 4));
   fs.mkdirSync(pdir, { recursive: true });
   fs.writeFileSync(path.join(pdir, `${compact}.json.gz`), zlib.gzipSync(JSON.stringify({ model: model.version, rule: model.bet ? model.bet.rule : null, exacta: preds })));
