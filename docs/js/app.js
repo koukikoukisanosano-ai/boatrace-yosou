@@ -457,7 +457,7 @@ function splitResult(r) {
 }
 function splitTag(r) {
   const d = r.botPick && r.botPick.d;
-  if (!d) return r.hasResult ? '<span class="bet pass">判定なし</span>' : minsLeft(r) > 3.5 ? '<span class="bet pass">締切2〜3分前に判定</span>' : '<span class="bet pass">判定中</span>';
+  if (!d) return r.hasResult ? '<span class="bet pass">判定なし</span>' : minsLeft(r) > 4 ? '<span class="bet pass">締切約3分前に判定</span>' : '<span class="bet pass">判定中</span>';
   if (!splitBuy(d)) return `<span class="bet pass">見送り（${d.why === 'same' ? '予想と人気が同じ' : d.why === 'low' ? `${SPLIT_MIN_ODDS}倍未満` : d.why === 'no-odds' ? 'オッズなし' : `確率${pct(SPLIT_MIN_P)}%未満`}）</span>`;
   const t = d.picks[0], res = splitResult(r);
   const mark = res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? `的中 ${res.odds.toFixed(1)}倍 +${yen(res.odds * stake() - stake())}` : '外れ'}</span>` : '';
@@ -465,7 +465,7 @@ function splitTag(r) {
 }
 function splitDetail(r, pr) {
   const d = r.botPick && r.botPick.d;
-  let head = '<div class="note">締切の約2〜3分前に、その時のオッズで判定して通知します。</div>';
+  let head = '<div class="note">締切の約3分前に、その時のオッズで判定して通知します。</div>';
   if (d) {
     const t = d.top, f = d.fav || {};
     const res = splitResult(r);
@@ -473,7 +473,7 @@ function splitDetail(r, pr) {
     const came = r.hasResult && paid.length ? `<div class="k">結果の2連複: <b class="num">${paid.map((x) => x.combo).join(' ')}</b> ${paid.map((x) => `${(x.amount / 100).toFixed(1)}倍`).join(' ')}</div>` : '';
     head = `<div class="rec main-bet"><div class="rec-h"><b>${splitBuy(d) ? '買い' : '見送り'}</b>${res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? '的中' : '外れ'}</span>` : ''}</div>
     <div class="ev-sum"><span>予想の1番 <b class="num">${t.combo}</b> 確率${pct(t.p, 1)}%・${t.odds ? t.odds.toFixed(1) : '-'}倍</span><span>人気の1番 <b class="num">${f.combo || '-'}</b> ${f.odds ? f.odds.toFixed(1) : '-'}倍</span></div>
-    ${came}<div class="rule">予想の1番と人気の1番が違い、予想の1番が${SPLIT_MIN_ODDS}倍以上・確率${pct(SPLIT_MIN_P)}%以上なら1点買い（締切約2〜3分前のオッズで判定）</div></div>`;
+    ${came}<div class="rule">予想の1番と人気の1番が違い、予想の1番が${SPLIT_MIN_ODDS}倍以上・確率${pct(SPLIT_MIN_P)}%以上なら1点買い（締切約3分前のオッズで判定）</div></div>`;
   }
   if (!pr) return head;
   // どの艇が来やすいか: 1着と2着以内（2連複に効くのは2着以内）の確率
@@ -1090,7 +1090,7 @@ async function renderNotify() {
   const topic = race ? (notifyCfg.topic_race || notifyCfg.topic) : notifyCfg.topic;
   const minp = Math.round((notifyCfg.min_p || 0.2) * 100);
   const what = race
-    ? (notifyCfg.per_race === false ? '買い目の通知は今は止めています。' : `締切の約2〜3分前に、2連複の割れ狙い（確率${minp}%以上）の買い目が決まるたびに通知します（1日10点前後）。今は仮想で記録中なので、買うかどうかはご自身で。`)
+    ? (notifyCfg.per_race === false ? '買い目の通知は今は止めています。' : `締切の約3分前に、2連複の割れ狙い（確率${minp}%以上）の買い目が決まるたびに通知します（1日10点前後）。今は仮想で記録中なので、買うかどうかはご自身で。`)
     : `毎晩、その日の最後のレースの結果が出たら1回だけ、2連複の割れ狙い（確率${minp}%以上）を買っていたらどうだったか（的中・回収率・損益）を通知します。`;
   el.innerHTML = `<p><b>${race ? '買い目の通知' : 'まとめの通知'}</b>: ${what}ページを開いていなくても届きます。</p>
     <ol><li>App Store で「ntfy」アプリを入れる（無料）</li>
@@ -1147,6 +1147,44 @@ async function fastOdds() {
   } catch (e) { console.error(e); } finally { fastBusy = false; }
 }
 setInterval(fastOdds, 20000);
+// 判定をすぐ受け取る: live.py が判定のたびに ntfy のデータ用トピックへ送る（{day, d: {"jcd-rno": 判定}}）。
+// GitHub Pages の反映（1〜3分）を待たずに、締切前に「買い / 見送り」を出す。締切4分半前〜締切1分半後で判定がまだのレースがある時だけ読む
+let ntfySince = '';
+let ntfyBusy = false;
+async function ntfyDecisions() {
+  if (ntfyBusy || document.visibilityState !== 'visible' || state.date !== jstToday() || !SPLIT()) return;
+  if (!notifyCfg) { try { notifyCfg = (await getJSON('notify.json', 'no-cache')).json; } catch (e) { return; } }
+  const topic = notifyCfg && notifyCfg.topic_data;
+  if (!topic) return;
+  const wait = state.races.filter((r) => !(r.botPick && r.botPick.d) && minsLeft(r) <= 4.5 && minsLeft(r) >= -1.5);
+  if (!wait.length) return;
+  ntfyBusy = true;
+  try {
+    const res = await fetch(`https://ntfy.sh/${encodeURIComponent(topic)}/json?poll=1&since=${ntfySince || '30m'}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const text = await res.text();
+    let changed = false;
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let ev; try { ev = JSON.parse(line); } catch (e) { continue; }
+      if (ev.event !== 'message') continue;
+      if (ev.id) ntfySince = ev.id;
+      let m; try { m = JSON.parse(ev.message); } catch (e) { continue; }
+      if (!m || m.day !== state.date || !m.d) continue;
+      for (const [k, d] of Object.entries(m.d)) {
+        const r = state.races.find((x) => `${x.jcd}-${x.rno}` === k);
+        if (!r || (r.botPick && r.botPick.d)) continue;
+        const bp = { ...(r.botPick || {}), state: (r.botPick && r.botPick.state) || d.state, picks: (r.botPick && r.botPick.picks) || [], d };
+        r.botPick = bp; botCache.set(k, bp); changed = true;
+      }
+    }
+    if (changed) {
+      for (const r of wait) { const art = document.getElementById(`r-${r.id}`); if (art) art.outerHTML = raceRow(r); }
+      renderStatus();
+    }
+  } catch (e) { /* 読めなければ今まで通り（ページの更新を待つ） */ } finally { ntfyBusy = false; }
+}
+setInterval(ntfyDecisions, 15000);
 
 setInterval(() => {
   if (document.visibilityState !== 'visible') return;

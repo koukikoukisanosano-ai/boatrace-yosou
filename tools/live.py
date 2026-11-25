@@ -400,8 +400,12 @@ class Live:
             log("買い目の計算に失敗:", e)
             return
         now = datetime.now(JST)
+        batch = {}
         for o in outs:
             key = o["key"]
+            if o.get("d"):
+                dd = o["d"]
+                batch[key] = {k: dd.get(k) for k in ("state", "why", "picks", "top", "fav")}
             final = bool((self.store["odds"].get(key) or {}).get("final"))
             self.store["picks"][key] = {"state": o["state"], "picks": o["picks"], "at": now.isoformat(timespec="seconds"), "final": final}
             if o.get("probs"):
@@ -477,6 +481,26 @@ class Live:
                 self.stats["notify"] = self.stats.get("notify", 0) + 1
             except Exception as e:  # noqa: BLE001
                 log("通知に失敗:", e)
+        self.send_data(batch)
+
+    def send_data(self, batch: dict):
+        """判定（買い・見送り）をサイトにすぐ届ける: 通知とは別の ntfy トピック（誰も購読しない・データ用）に1回の判定分をまとめて1通。
+        GitHub Pages の反映（1〜3分）を待たずに、サイトが締切前に判定を出せる。買い目の通知を優先し、回数の上限に当たったら今日は送らない"""
+        topic = NOTIFY.get("topic_data")
+        if not batch or not topic or self.stats.get("data_off"):
+            return
+        body = json.dumps({"day": self.day, "d": batch}, ensure_ascii=False, separators=(",", ":"))
+        if len(body.encode("utf-8")) > 3900:   # 1通の上限（4KB）に収める
+            items = list(batch.items()); half = len(items) // 2
+            self.send_data(dict(items[:half])); self.send_data(dict(items[half:]))
+            return
+        try:
+            r = self.s.post(f"https://ntfy.sh/{topic}", data=body.encode("utf-8"), headers={"Priority": "1", "Title": "data"}, timeout=10)
+            if r.status_code == 429:
+                self.stats["data_off"] = 1
+                log("判定データの送信: 回数の上限に当たったので今日は止めます")
+        except Exception as e:  # noqa: BLE001
+            log("判定データの送信に失敗:", e)
 
     def fetch_odds(self, x: dict):
         html = self.official("odds3t", x["jcd"], x["rno"])
@@ -779,6 +803,10 @@ class Live:
                 self.publish()
             busy = self.soon(datetime.now(JST))               # もうすぐ再取得するレースがあるなら、ほかは少しずつ
             self.capture_odds(self.odds_targets(now)[:3 if busy else 6])
+            nk = self.notify_targets(datetime.now(JST))      # オッズが取れたら次の周を待たずにすぐ判定・通知（締切まで時間を残す）
+            if nk:
+                self.notify(nk)
+                self.publish()
             self.capture_many(self.targets(now)[:3 if busy else 12])
             if not busy:
                 self.capture_laps(datetime.now(JST))

@@ -2,11 +2,12 @@
  "topic": "boatrace-yosou-038de678dd",
  "bank": 500000,
  "page": "https://koukikoukisanosano-ai.github.io/boatrace-yosou/",
- "lead_min": 2,
+ "lead_min": 3,
  "exacta": false,
  "mode": "split",
  "per_race": true,
  "summary": true,
  "min_p": 0.2,
- "topic_race": "boatrace-yosou-038de678dd-kaime"
+ "topic_race": "boatrace-yosou-038de678dd-kaime",
+ "topic_data": "boatrace-yosou-038de678dd-data"
 }
