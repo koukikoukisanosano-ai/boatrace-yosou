@@ -27,6 +27,15 @@
   "path": "/asp/kyogi/{JJ}/pc/st02{RR}.htm",
   "since": "2026-11-18"
  },
+ "23": {
+  "cols": [
+   "まわり足",
+   "一周",
+   "直線"
+  ],
+  "path": "/sp/index.php?page=yosou-cyokuzen&race={R}&day={D}",
+  "since": "2026-11-26"
+ },
  "4": {
   "cols": [
    "一周",
