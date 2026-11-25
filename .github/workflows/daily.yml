@@ -50,6 +50,8 @@ jobs:
           else
             echo "今のモデルは下地なしで学習しています"
           fi
+      - name: 券種別の売上（常滑の記録表PDF）
+        run: python tools/fetch_sales.py || echo "売上を取れませんでした"
       - name: 今日走る選手の近況
         run: node tools/make_state.mjs
       - name: 学習し直し（手動のときだけ。毎週月曜は「学習し直し」のワークフロー）
