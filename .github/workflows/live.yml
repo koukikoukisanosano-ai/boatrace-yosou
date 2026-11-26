@@ -38,6 +38,14 @@ jobs:
         with:
           node-version: '22'
       - run: pip install -r requirements.txt
+      - name: 毎朝の準備が遅れていたら代わりに動かす（GitHubの予定実行は何時間も遅れることがある）
+        run: |
+          Y=$(date -d yesterday +%F)
+          if python -c "import json,sys;d=[x['date'] for x in json.load(open('docs/data/report.json'))['days']];sys.exit(0 if '$Y' in d else 1)"; then
+            echo "昨日（$Y）の記録あり"
+          elif [ "$(date +%H)" -ge 6 ] && [ -z "$(gh run list -w daily.yml -s in_progress -L 1 -q '.[].databaseId' --json databaseId)$(gh run list -w daily.yml -s queued -L 1 -q '.[].databaseId' --json databaseId)" ]; then
+            gh workflow run daily.yml --ref main && echo "毎朝の準備を動かしました"
+          fi
       - name: 直前情報を取りつづける（締切1分前に買い目を決めて通知）
         run: |
           git config user.name "github-actions[bot]"
