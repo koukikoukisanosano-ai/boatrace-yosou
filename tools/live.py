@@ -779,6 +779,33 @@ class Live:
         except Exception as e:  # noqa: BLE001
             log("まとめの通知に失敗:", e)
 
+    def day_report(self):
+        """その日のうちにグラフも更新: まとめの通知の後（結果はそろっている）、今日の公開データを data/openapi に保存して
+        答え合わせ（tools/report.mjs）を走らせ、docs/data/report.json を保存する。翌朝の処理でも同じ日をもう一度作り直す"""
+        if self.store.get("report_done") or not self.push:
+            return
+        try:
+            import fetch_openapi as fo   # tools/ は import のパスに入っている
+            from datetime import date as _date
+            d = _date.fromisoformat(self.day)
+            j = fo.fetch_day(self.s, d)
+            if not j:
+                return
+            fo.save(d, j)
+            r = subprocess.run(["node", str(ROOT / "tools" / "report.mjs"), self.day], cwd=ROOT, capture_output=True, text=True, timeout=1200)
+            log("今日の答え合わせ:", (r.stdout or r.stderr).strip().splitlines()[-1:] )
+            if r.returncode != 0:
+                return
+            self.git("add", str(fo.path_for(d).relative_to(ROOT)), "docs/data/report.json")
+            if self.git("diff", "--cached", "--quiet").returncode != 0:
+                self.git("commit", "-q", "-m", f"答え合わせ {self.day}（当日）")
+                self.unpushed = True
+            self.store["report_done"] = datetime.now(JST).isoformat(timespec="seconds")
+            self.dirty = True
+            self.publish()
+        except Exception as e:  # noqa: BLE001
+            log("今日の答え合わせに失敗:", e)
+
     def run(self, max_minutes: float, once: bool):
         started = time.time()
         while True:
@@ -797,6 +824,7 @@ class Live:
                 log("今日のレースは終わりました")
                 if not once:
                     self.day_summary()
+                    self.day_report()
                 break
             self.capture_final(self.final_targets(now)[:3])  # 締切1分前の2連単オッズを最優先
             if self.dirty:
