@@ -796,7 +796,7 @@ class Live:
             log("今日の答え合わせ:", (r.stdout or r.stderr).strip().splitlines()[-1:] )
             if r.returncode != 0:
                 return
-            self.git("add", str(fo.path_for(d).relative_to(ROOT)), "docs/data/report.json")
+            self.git("add", str(fo.path_for(d).relative_to(ROOT)), "docs/data/report.json", "data/preds")
             if self.git("diff", "--cached", "--quiet").returncode != 0:
                 self.git("commit", "-q", "-m", f"答え合わせ {self.day}（当日）")
                 self.unpushed = True
