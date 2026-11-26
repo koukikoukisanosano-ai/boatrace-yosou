@@ -457,7 +457,7 @@ function splitResult(r) {
 }
 function splitTag(r) {
   const d = r.botPick && r.botPick.d;
-  if (!d) return r.hasResult ? '<span class="bet pass">判定なし</span>' : minsLeft(r) > 4 ? '<span class="bet pass">締切約3分前に判定</span>' : '<span class="bet pass">判定中</span>';
+  if (!d) return r.hasResult ? '<span class="bet pass">判定なし</span>' : minsLeft(r) > 3 ? '<span class="bet pass">締切約2分前に判定</span>' : '<span class="bet pass">判定中</span>';
   if (!splitBuy(d)) return `<span class="bet pass">見送り（${d.why === 'same' ? '予想と人気が同じ' : d.why === 'low' ? `${SPLIT_MIN_ODDS}倍未満` : d.why === 'no-odds' ? 'オッズなし' : `確率${pct(SPLIT_MIN_P)}%未満`}）</span>`;
   const t = d.picks[0], res = splitResult(r);
   const mark = res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? `的中 ${res.odds.toFixed(1)}倍 +${yen(res.odds * stake() - stake())}` : '外れ'}</span>` : '';
@@ -465,7 +465,7 @@ function splitTag(r) {
 }
 function splitDetail(r, pr) {
   const d = r.botPick && r.botPick.d;
-  let head = '<div class="note">締切の約3分前に、その時のオッズで判定して通知します。</div>';
+  let head = '<div class="note">締切の約2分前に、その時のオッズで判定して通知します。</div>';
   if (d) {
     const t = d.top, f = d.fav || {};
     const res = splitResult(r);
@@ -473,7 +473,7 @@ function splitDetail(r, pr) {
     const came = r.hasResult && paid.length ? `<div class="k">結果の2連複: <b class="num">${paid.map((x) => x.combo).join(' ')}</b> ${paid.map((x) => `${(x.amount / 100).toFixed(1)}倍`).join(' ')}</div>` : '';
     head = `<div class="rec main-bet"><div class="rec-h"><b>${splitBuy(d) ? '買い' : '見送り'}</b>${res ? `<span class="hitmark ${res.hit ? 'yes' : 'no'}">${res.hit ? '的中' : '外れ'}</span>` : ''}</div>
     <div class="ev-sum"><span>予想の1番 <b class="num">${t.combo}</b> 確率${pct(t.p, 1)}%・${t.odds ? t.odds.toFixed(1) : '-'}倍</span><span>人気の1番 <b class="num">${f.combo || '-'}</b> ${f.odds ? f.odds.toFixed(1) : '-'}倍</span></div>
-    ${came}<div class="rule">予想の1番と人気の1番が違い、予想の1番が${SPLIT_MIN_ODDS}倍以上・確率${pct(SPLIT_MIN_P)}%以上なら1点買い（締切約3分前のオッズで判定）</div></div>`;
+    ${came}<div class="rule">予想の1番と人気の1番が違い、予想の1番が${SPLIT_MIN_ODDS}倍以上・確率${pct(SPLIT_MIN_P)}%以上なら1点買い（締切約2分前のオッズで判定）</div></div>`;
   }
   if (!pr) return head;
   // どの艇が来やすいか: 1着と2着以内（2連複に効くのは2着以内）の確率
@@ -1090,7 +1090,7 @@ async function renderNotify() {
   const topic = race ? (notifyCfg.topic_race || notifyCfg.topic) : notifyCfg.topic;
   const minp = Math.round((notifyCfg.min_p || 0.2) * 100);
   const what = race
-    ? (notifyCfg.per_race === false ? '買い目の通知は今は止めています。' : `締切の約3分前に、2連複の割れ狙い（確率${minp}%以上）の買い目が決まるたびに通知します（1日10点前後）。今は仮想で記録中なので、買うかどうかはご自身で。`)
+    ? (notifyCfg.per_race === false ? '買い目の通知は今は止めています。' : `締切の約2分前に、2連複の割れ狙い（確率${minp}%以上）の買い目が決まるたびに通知します（1日10点前後）。今は仮想で記録中なので、買うかどうかはご自身で。`)
     : `毎晩、その日の最後のレースの結果が出たら1回だけ、2連複の割れ狙い（確率${minp}%以上）を買っていたらどうだったか（的中・回収率・損益）を通知します。`;
   el.innerHTML = `<p><b>${race ? '買い目の通知' : 'まとめの通知'}</b>: ${what}ページを開いていなくても届きます。</p>
     <ol><li>App Store で「ntfy」アプリを入れる（無料）</li>
