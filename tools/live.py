@@ -392,8 +392,12 @@ class Live:
         """ページと同じ計算（tools/pick.mjs）で買い目を決め、買いなら通知（ntfy）する"""
         if not keys or not DAY_JSON.exists():
             return
+        # 今のオッズ・直前情報（まだファイルに書いていない分も）を一時ファイルに書いて渡す。
+        # （保存前のファイルを渡すと、取ったばかりのオッズが入っておらず「判定できず」になる: 11/26朝の不具合）
+        tmp = Path("/tmp") / f"live-pick-{self.day}.json"
+        tmp.write_text(json.dumps(self.store, ensure_ascii=False, separators=(",", ":")))
         try:
-            r = subprocess.run(["node", str(ROOT / "tools" / "pick.mjs"), str(DAY_JSON), str(self.path()), ",".join(keys)],
+            r = subprocess.run(["node", str(ROOT / "tools" / "pick.mjs"), str(DAY_JSON), str(tmp), ",".join(keys)],
                                capture_output=True, text=True, timeout=60)
             outs = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
         except Exception as e:  # noqa: BLE001
