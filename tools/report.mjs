@@ -85,8 +85,13 @@ for (const ymd of dates) {
       if (split) {
         const c = d.top.combo;
         x.bets++;
-        if (c.split('=').map(Number).some((b) => refundsN.includes(b))) x.ret += 100;
-        else { const a = pay(r.payouts.quinella || [], c); if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, 1]); } }
+        const seq = x.seq || (x.seq = []);   // 1点ごとの記録 [締切, 払戻の倍率（外れ0・返還1）]（1点ごとのグラフ用）
+        if (c.split('=').map(Number).some((b) => refundsN.includes(b))) { x.ret += 100; seq.push([r.closedAt || '', 1]); }
+        else {
+          const a = pay(r.payouts.quinella || [], c);
+          if (a) { x.hits++; x.ret += a; x.hitOdds.push([a / 100, 1]); }
+          seq.push([r.closedAt || '', a / 100]);
+        }
       }
     }
     // 単勝（記録のみ）: docs/live の picks[].w

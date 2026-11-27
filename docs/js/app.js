@@ -13,6 +13,7 @@ const state = {
   openApiAt: null, liveAt: null, liveCount: 0, view: 'upcoming', venue: 0, open: new Set(),
   error: '', liveError: false, loading: false, loadedAt: null, report: null, snapExact: true, research: null, ev: null, exa: null, sim: null, fair: null, drift: null,
   mode: 'roi',
+  simMode: loadPref('simMode', 'day') === 'bet' ? 'bet' : 'day',
   site: loadPref('site', 'split') === 'tri' ? 'tri' : 'split', forms: {}, formsDate: '',
   bank: +loadPref('bank2', '500000') || 500000,
 };
@@ -894,9 +895,28 @@ function simulate(start, key = REC_KEY, from = SIM_FROM, liveFrom = '') {
   }
   return { pts, bank, dd, bets, roi: cost ? ret / cost : 0, rawRoi: cost ? raw / cost : 0 };
 }
+// 1点ごと: その日の記録の seq（締切順）を1点ずつ買っていく。賭け金は買う時点の残高の1/200
+function simulateBets(start, key, from, liveFrom) {
+  const pts = [{ d: '', bank: start, seg: 2 }]; let bank = start, peak = start, dd = 0, bets = 0, cost = 0, ret = 0, raw = 0;
+  const days = ((state.report && state.report.days) || []).filter((x) => x.rec && x.rec[key] && x.date >= from);
+  for (const x of days) {
+    const seq = (x.rec[key].seq || []).slice().sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    for (const [t, o] of seq) {
+      const st = Math.min(MAX_STAKE, Math.floor(bank / 200 / 100) * 100);
+      if (st < 100) break;
+      const oo = o > 1 ? TAKE * (Q_POOL + st) / (TAKE * Q_POOL / o + st) : o;
+      bank += st * (oo - 1); cost += st; ret += st * oo; raw += st * o; bets++;
+      peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
+      pts.push({ d: x.date.replace(/-/g, ''), t, bank, seg: liveFrom && x.date < liveFrom ? 1 : 2, hit: o > 1 });
+    }
+  }
+  return { pts, bank, dd, bets, roi: cost ? ret / cost : 0, rawRoi: cost ? raw / cost : 0, perBet: true };
+}
 function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = '', note = '', showRaw = false) {
   const start = state.bank;
-  const S = simulate(start, key, from, liveFrom);
+  const perBet = key === DKEY && state.simMode === 'bet';
+  const S = perBet ? simulateBets(start, key, from, liveFrom) : simulate(start, key, from, liveFrom);
+  const sw = key === DKEY ? `<div class="simsw" role="group" aria-label="グラフの単位"><button type="button" data-simmode="day" aria-pressed="${!perBet}">1日ごと</button><button type="button" data-simmode="bet" aria-pressed="${perBet}">1点ごと</button></div>` : '';
   const SIM_FROM = from;
   if (S.pts.length < 3) return `<section class="score"><h2>${title}（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>${note}<div class="k">${S.pts.length === 2 ? `1日目 ${S.bank - start >= 0 ? '+' : ''}${yen(S.bank - start)}（${S.bets}点）` : '毎朝、前日の分を記録します'}</div></section>`;
   const W = 340, H = 170, L = 16, T = 10, B = 20;
@@ -911,11 +931,19 @@ function renderSim(key = REC_KEY, title = '損益', from = SIM_FROM, liveFrom = 
   const lines = segs.map((pp, k) => (pp.length > 1 ? `<polyline class="${cls[k]}" points="${pp.join(' ')}"/>` : '')).join('');
   // 1日＝1つの点。日付は点の真下に（多い日は間引く）。左端の点は記録を始める前の入金額
   const lab = (i) => { const d = S.pts[i].d; return d ? `${+d.slice(4, 6)}/${+d.slice(6, 8)}` : '開始'; };
-  const every = Math.max(1, Math.ceil((S.pts.length - 1) / 7));
-  const dots = S.pts.map((p, i) => (i ? `<circle class="${cls[p.seg]}-dot" cx="${x(i).toFixed(1)}" cy="${y(p.bank).toFixed(1)}" r="2.6"/>` : '')).join('');
-  const xt = S.pts.map((p, i) => ((i === 0 || i === S.pts.length - 1 || (i % every === 0 && S.pts.length - 1 - i >= every / 2)) ? `<text x="${x(i).toFixed(1)}" y="${H - 5}" text-anchor="middle">${lab(i)}</text>` : '')).join('');
+  let dots, xt;
+  if (S.perBet) {   // 1点ごと: 当たった点だけ印。日付は各日の最初の点の下（多い時は間引く）、日の境目に薄い縦線
+    dots = S.pts.map((p, i) => (i && p.hit ? `<circle class="${cls[p.seg]}-dot" cx="${x(i).toFixed(1)}" cy="${y(p.bank).toFixed(1)}" r="2"/>` : '')).join('');
+    const firsts = S.pts.map((p, i) => i).filter((i) => i > 0 && S.pts[i].d !== S.pts[i - 1].d);
+    const every = Math.max(1, Math.ceil(firsts.length / 6));
+    xt = firsts.map((i, j) => `<line class="dayline" x1="${x(i - 0.5).toFixed(1)}" x2="${x(i - 0.5).toFixed(1)}" y1="${T}" y2="${H - B}"/>${j % every === 0 ? `<text x="${x(i).toFixed(1)}" y="${H - 5}" text-anchor="start">${lab(i)}</text>` : ''}`).join('');
+  } else {
+    const every = Math.max(1, Math.ceil((S.pts.length - 1) / 7));
+    dots = S.pts.map((p, i) => (i ? `<circle class="${cls[p.seg]}-dot" cx="${x(i).toFixed(1)}" cy="${y(p.bank).toFixed(1)}" r="2.6"/>` : '')).join('');
+    xt = S.pts.map((p, i) => ((i === 0 || i === S.pts.length - 1 || (i % every === 0 && S.pts.length - 1 - i >= every / 2)) ? `<text x="${x(i).toFixed(1)}" y="${H - 5}" text-anchor="middle">${lab(i)}</text>` : '')).join('');
+  }
   const gain = S.bank - start;
-  return `<section class="score"><h2>${title}（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>
+  return `<section class="score"><h2>${title}（${+SIM_FROM.slice(5, 7)}/${+SIM_FROM.slice(8)}から・入金${yen(start)}）</h2>${sw}
     <div class="grid">
       <div><div class="k">残高</div><div class="v">${Math.round(S.bank / 1000).toLocaleString()}<small>千円</small></div><div class="k">${gain >= 0 ? '+' : ''}${yen(gain)}</div></div>
       <div><div class="k">回収率（${S.bets.toLocaleString()}点）</div><div class="v">${pct(S.roi)}<small>%</small></div>${showRaw ? `<div class="k">差し引く前 ${pct(S.rawRoi)}%</div>` : ''}</div>
@@ -980,12 +1008,12 @@ function render() {
   const rs = filtered();
   let html = state.error ? `<div class="note bad">${esc(state.error)}</div>` : '';
   if (SPLIT() && state.view === 'done') html += splitScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue)) + renderSim(DKEY, '仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', D_SIM_FROM, '2026-11-25',
-    '<div class="k">締切約2〜3分前に実際に決めた買い目とその時のオッズで計算。2連複の売上を1レース20万円と仮定して、自分の賭け金でオッズが下がる分を差し引いています（翌朝に前日分を記録）</div>', true);
+    '<div class="k">締切約2〜3分前に実際に決めた買い目とその時のオッズで計算。2連複の売上を1レース20万円と仮定して、自分の賭け金でオッズが下がる分を差し引いています（その日の結果は夜のまとめの通知の後に記録）</div>', true);
   else if (state.view === 'done' && !SPLIT()) html += triScore(state.races.filter((r) => state.venue === 0 || r.jcd === state.venue));
   else if (state.view === 'done') html += renderScore(rs) + (SHOW_EXACTA ? renderSim() : '') + renderSim(QKEY, '2連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', Q_SIM_FROM, Q_LIVE_FROM,
-    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（翌朝に前日分を記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + renderSim(KKEY, '拡連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', K_SIM_FROM, K_SIM_FROM,
-    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズ（幅の下限）で計算。拡連複は売上がとても少ないので、1レース10万円と厳しめに仮定して差し引いています（翌朝に前日分を記録）</div>', true) + renderSim(FKEY, '3連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', F_SIM_FROM, F_SIM_FROM,
-    '<div class="k">確率が一番高い3連複で期待値1.2以上のときだけ。締切約2〜3分前に実際に決めた買い目とその時のオッズで計算し、3連複の売上を1レース50万円と仮定して差し引いています（翌朝に前日分を記録）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
+    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズだけで計算します（その日の結果は夜のまとめの通知の後に記録）。自分の賭け金で2連複のオッズが下がる分を差し引き済み（2連複の売上を1レース20万円と仮定）</div>', true) + renderSim(KKEY, '拡連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', K_SIM_FROM, K_SIM_FROM,
+    '<div class="k">締切約2〜3分前に実際に決めた買い目と、その時のオッズ（幅の下限）で計算。拡連複は売上がとても少ないので、1レース10万円と厳しめに仮定して差し引いています（その日の結果は夜のまとめの通知の後に記録）</div>', true) + renderSim(FKEY, '3連複の仮想損益（自分の賭け金でオッズが下がる分を差し引き済み）', F_SIM_FROM, F_SIM_FROM,
+    '<div class="k">確率が一番高い3連複で期待値1.2以上のときだけ。締切約2〜3分前に実際に決めた買い目とその時のオッズで計算し、3連複の売上を1レース50万円と仮定して差し引いています（その日の結果は夜のまとめの通知の後に記録）</div>', true) + (SHOW_EXACTA ? renderRecord() : '');
   if (!rs.length) html += `<div class="note">${SPLIT() && !state.showPass ? (state.view === 'upcoming' ? 'これから締切の買いのレースはありません（判定は締切約2〜3分前）。' : '買いになったレースはまだありません。') : state.view === 'upcoming' ? 'これから締切のレースはありません。' : 'まだ終わったレースはありません。'}</div>`;
   if (SPLIT()) {
     const nPass = state.races.filter((r) => (state.venue === 0 || r.jcd === state.venue) && r.botPick && r.botPick.d && !splitBuy(r.botPick.d)).length;
@@ -1022,6 +1050,8 @@ function renderFooter() {
 
 // ------------------------------------------------------------------ 操作
 document.addEventListener('click', (e) => {
+  const sm = e.target.closest('[data-simmode]');
+  if (sm) { state.simMode = sm.dataset.simmode; savePref('simMode', state.simMode); render(); return; }
   const sb = e.target.closest('[data-site]');
   if (sb) { state.site = sb.dataset.site; savePref('site', state.site); render(); window.scrollTo({ top: 0 }); return; }
   const fc = e.target.closest('[data-fcell], [data-fpreset]');

@@ -219,6 +219,10 @@ svg.sim polyline { fill: none; stroke-width: 1.6; stroke-linejoin: round; }
 svg.sim .sim-dev { stroke: var(--faint); }
 svg.sim .sim-hold { stroke: var(--water); }
 svg.sim .sim-live { stroke: var(--ok); stroke-width: 2.2; }
+.simsw { display: flex; gap: 0; margin: 2px 0 8px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; width: fit-content; }
+.simsw button { border: 0; background: var(--surface); padding: 4px 12px; font-size: 12.5px; color: var(--muted); }
+.simsw button[aria-pressed="true"] { background: var(--water); color: #fff; font-weight: 700; }
+svg.sim .dayline { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 3; }
 .sim-dev-dot { fill: var(--faint); } .sim-hold-dot { fill: var(--water); } .sim-live-dot { fill: var(--ok); }
 svg.sim .base { stroke: var(--line); stroke-dasharray: 3 3; }
 svg.sim text { font-size: 10px; fill: var(--muted); font-family: var(--num); }
